@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Comparison Tool</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        .result-container {
+            margin-top: 40px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            background-color: #2c2c2c;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #333;
+            padding: 12px 20px;
+            border-bottom: 1px solid #444;
+        }
+
+        .result-header h2 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: #f0f0f0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .copy-btn {
+            background-color: #4a4a4a;
+            color: #f0f0f0;
+            border: 1px solid #666;
+            border-radius: 5px;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease-in-out;
+        }
+
+        .copy-btn:hover {
+            background-color: #5a5a5a;
+            border-color: #888;
+        }
+
+        .copy-btn:active {
+            transform: scale(0.98);
+        }
+
+        .copy-btn.copied {
+            background-color: #28a745;
+            border-color: #28a745;
+            color: #fff;
+        }
+
+        .comparison-result {
+            background: #222;
+            color: #f8f8f2;
+            padding: 20px;
+            font-family: 'Fira Mono', 'Consolas', 'Monaco', monospace;
+            font-size: 1rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            max-height: 60vh;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-file-code" aria-hidden="true"></i> File Comparison Tool</h1>
+            <p>Upload two versions of your file and compare the differences</p>
+        </div>
+
+        <form action="/compare" method="post" enctype="multipart/form-data" id="compareForm">
+            <div class="content">
+                <div class="upload-row">
+                    <div class="upload-box">
+                        <h2><i class="fas fa-folder-minus" aria-hidden="true"></i> Before Version</h2>
+                        <div class="upload-area" id="beforeUploadArea" tabindex="0" role="button" aria-label="Upload original file">
+                            <i class="fas fa-cloud-upload-alt" aria-hidden="true"></i>
+                            <h3>Upload Original File</h3>
+                            <p>Drag & drop your file here or click to browse</p>
+                            <label for="file1" class="browse-btn">Browse Files</label>
+                            <input type="file" id="file1" name="file1" accept=".xls,.xlsx" required style="display:none;">
+                        </div>
+                        <div class="file-info" id="beforeFileInfo" style="display:none;">
+                            <p>
+                                <i class="fas fa-file" aria-hidden="true"></i>
+                                <span id="beforeFileName"></span>
+                                <button type="button" id="removeBeforeFile" class="remove-btn" title="Remove file" aria-label="Remove file">
+                                    <i class="fas fa-times" aria-hidden="true"></i>
+                                </button>
+                            </p>
+                        </div>
+                        <div id="beforeFileError" class="error-message" style="display:none;"></div>
+                    </div>
+
+                    <div class="upload-box">
+                        <h2><i class="fas fa-folder-plus" aria-hidden="true"></i> After Version</h2>
+                        <div class="upload-area" id="afterUploadArea" tabindex="0" role="button" aria-label="Upload modified file">
+                            <i class="fas fa-cloud-upload-alt" aria-hidden="true"></i>
+                            <h3>Upload Modified File</h3>
+                            <p>Drag & drop your file here or click to browse</p>
+                            <label for="file2" class="browse-btn">Browse Files</label>
+                            <input type="file" id="file2" name="file2" accept=".xls,.xlsx" required style="display:none;">
+                        </div>
+                        <div class="file-info" id="afterFileInfo" style="display:none;">
+                            <p>
+                                <i class="fas fa-file" aria-hidden="true"></i>
+                                <span id="afterFileName"></span>
+                                <button type="button" id="removeAfterFile" class="remove-btn" title="Remove file" aria-label="Remove file">
+                                    <i class="fas fa-times" aria-hidden="true"></i>
+                                </button>
+                            </p>
+                        </div>
+                        <div id="afterFileError" class="error-message" style="display:none;"></div>
+                    </div>
+                </div>
+
+                <div class="compare-btn-row">
+                    <button type="submit" class="compare-btn" id="compareButton">
+                        <i class="fas fa-exchange-alt" aria-hidden="true"></i> Compare Files
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        {% if result %}
+        <div class="result-container">
+            <div class="result-header">
+                <h2><i class="fas fa-poll-h" aria-hidden="true"></i> Comparison Result</h2>
+                <button type="button" id="copyResultButton" class="copy-btn" title="Copy to clipboard">
+                    <i class="far fa-copy" aria-hidden="true"></i> <span>Copy</span>
+                </button>
+            </div>
+            <div class="comparison-result" id="comparisonResultContent">
+                {{ result|safe }}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Before Version File Handling
+            const file1Input = document.getElementById('file1');
+            const beforeFileInfo = document.getElementById('beforeFileInfo');
+            const beforeFileName = document.getElementById('beforeFileName');
+            const removeBeforeFile = document.getElementById('removeBeforeFile');
+            const beforeUploadArea = document.getElementById('beforeUploadArea');
+            const beforeFileError = document.getElementById('beforeFileError');
+
+            // After Version File Handling
+            const file2Input = document.getElementById('file2');
+            const afterFileInfo = document.getElementById('afterFileInfo');
+            const afterFileName = document.getElementById('afterFileName');
+            const removeAfterFile = document.getElementById('removeAfterFile');
+            const afterUploadArea = document.getElementById('afterUploadArea');
+            const afterFileError = document.getElementById('afterFileError');
+
+            // Form and submit button
+            const compareForm = document.getElementById('compareForm');
+
+            function validateFile(file, errorElement) {
+                const allowedExtensions = ['.xls', '.xlsx'];
+                const fileName = file.name.toLowerCase();
+                const isValid = allowedExtensions.some(ext => fileName.endsWith(ext));
+                if (!isValid) {
+                    errorElement.textContent = 'Please upload only Excel files (.xls, .xlsx)';
+                    errorElement.style.display = 'block';
+                    return false;
+                }
+                errorElement.style.display = 'none';
+                return true;
+            }
+
+            function handleFileSelectionDisplay(inputElement, fileNameElement, fileInfoElement, errorElement) {
+                if (inputElement.files.length > 0) {
+                    if (validateFile(inputElement.files[0], errorElement)) {
+                        fileNameElement.textContent = inputElement.files[0].name;
+                        fileInfoElement.style.display = 'block';
+                    } else {
+                        inputElement.value = '';
+                    }
+                } else {
+                    fileInfoElement.style.display = 'none';
+                }
+            }
+
+            function setupUploadArea(uploadArea, fileInput) {
+                uploadArea.addEventListener('click', function(event) {
+                    if (event.target.tagName === 'LABEL') {
+                        return;
+                    }
+                    fileInput.click();
+                });
+            }
+
+            function setupFileInput(fileInput) {
+                fileInput.addEventListener('click', function(event) {
+                    event.stopPropagation();
+                    this.value = null;
+                });
+            }
+
+            setupUploadArea(beforeUploadArea, file1Input);
+            setupUploadArea(afterUploadArea, file2Input);
+            setupFileInput(file1Input);
+            setupFileInput(file2Input);
+
+            file1Input.addEventListener('change', function() {
+                handleFileSelectionDisplay(file1Input, beforeFileName, beforeFileInfo, beforeFileError);
+            });
+
+            file2Input.addEventListener('change', function() {
+                handleFileSelectionDisplay(file2Input, afterFileName, afterFileInfo, afterFileError);
+            });
+
+            removeBeforeFile.addEventListener('click', function() {
+                file1Input.value = '';
+                beforeFileInfo.style.display = 'none';
+                beforeFileError.style.display = 'none';
+            });
+
+            removeAfterFile.addEventListener('click', function() {
+                file2Input.value = '';
+                afterFileInfo.style.display = 'none';
+                afterFileError.style.display = 'none';
+            });
+
+            function setupDragAndDrop(uploadArea, fileInput, errorElement) {
+                uploadArea.addEventListener('dragover', function(e) {
+                    e.preventDefault();
+                    uploadArea.classList.add('dragover');
+                });
+                uploadArea.addEventListener('dragleave', function(e) {
+                    e.preventDefault();
+                    uploadArea.classList.remove('dragover');
+                });
+                uploadArea.addEventListener('drop', function(e) {
+                    e.preventDefault();
+                    uploadArea.classList.remove('dragover');
+                    if (e.dataTransfer.files.length > 0) {
+                        if (validateFile(e.dataTransfer.files[0], errorElement)) {
+                            fileInput.files = e.dataTransfer.files;
+                            fileInput.dispatchEvent(new Event('change'));
+                        }
+                    }
+                });
+            }
+
+            setupDragAndDrop(beforeUploadArea, file1Input, beforeFileError);
+            setupDragAndDrop(afterUploadArea, file2Input, afterFileError);
+
+            compareForm.addEventListener('submit', function(e) {
+                if (!file1Input.files.length || !file2Input.files.length) {
+                    e.preventDefault();
+                    if (!file1Input.files.length) {
+                        beforeFileError.textContent = 'Please select a file';
+                        beforeFileError.style.display = 'block';
+                    }
+                    if (!file2Input.files.length) {
+                        afterFileError.textContent = 'Please select a file';
+                        afterFileError.style.display = 'block';
+                    }
+                }
+            });
+
+            compareForm.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                }
+            });
+
+            // --- Script for Enhanced Result Section ---
+            const copyButton = document.getElementById('copyResultButton');
+            const resultContainer = document.getElementById('comparisonResultContent');
+
+            if (copyButton && resultContainer) {
+                copyButton.addEventListener('click', function() {
+                    const textToCopy = resultContainer.innerText;
+                    navigator.clipboard.writeText(textToCopy).then(() => {
+                        const buttonIcon = copyButton.querySelector('i');
+                        const buttonText = copyButton.querySelector('span');
+                        const originalText = buttonText.textContent;
+
+                        buttonIcon.classList.remove('fa-copy');
+                        buttonIcon.classList.add('fa-check');
+                        buttonText.textContent = 'Copied!';
+                        copyButton.classList.add('copied');
+                        
+                        setTimeout(() => {
+                            buttonIcon.classList.remove('fa-check');
+                            buttonIcon.classList.add('fa-copy');
+                            buttonText.textContent = originalText;
+                            copyButton.classList.remove('copied');
+                        }, 2000); // Revert back after 2 seconds
+                    }).catch(err => {
+                        console.error('Failed to copy text: ', err);
+                        alert('Failed to copy results.');
+                    });
+                });
+            }
+        });
+    </script>
+</body>
+</html>
