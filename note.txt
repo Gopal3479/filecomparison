@@ -1,0 +1,38 @@
+for i in range(new_wb.Sheets.Count, 0, -1): # Iterate backwards for safe deletion
+                if new_wb.Sheets(i).Name == target_sheet_name:
+                    print(f"    Sheet '{target_sheet_name}' already exists. Deleting old one.")
+                    new_wb.Sheets(i).Delete()
+                    break
+
+            # 2. Add a new, blank sheet in the new workbook at the first position
+            new_sheet = new_wb.Sheets.Add(Before=new_wb.Sheets(1))
+            try:
+                new_sheet.Name = target_sheet_name
+            except Exception as e:
+                print(f"    Warning: Could not rename new sheet to '{target_sheet_name}'. Error: {e}")
+
+            # 3. Copy the entire used range from the source template sheet
+            source_template_sheet.UsedRange.Copy()
+
+            # 4. Select the destination and PasteSpecial
+            dest_range = new_sheet.Range('A1')
+            
+            try:
+                # Paste Values and Number Formats (keeps dates, currency, etc. looking correct)
+                dest_range.PasteSpecial(Paste=win32com.client.constants.xlPasteValuesAndNumberFormats)
+                print("    Pasted: Values and Number Formats.")
+                
+                # Paste Column Widths
+                dest_range.PasteSpecial(Paste=win32com.client.constants.xlPasteColumnWidths)
+                print("    Pasted: Column Widths.")
+                
+                # Paste all other formatting (colors, borders, etc.)
+                dest_range.PasteSpecial(Paste=win32com.client.constants.xlPasteFormats)
+                print("    Pasted: Other Cell Formats.")
+
+            except Exception as e:
+                print(f"    ERROR during PasteSpecial operation: {e}")
+                print("    The sheet may be incomplete. Attempting to clear clipboard and continue.")
+
+            # 5. Clear the clipboard to prevent Excel exit prompts
+            excel_app.CutCopyMode = False
