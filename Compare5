@@ -1,0 +1,125 @@
+import pandas as pd
+import numpy as np
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font
+from openpyxl.utils.dataframe import dataframe_to_rows
+
+def compare_excel_sheets(file1_path, file2_path, output_path, sheet_name=None):
+    """
+    Compares two Excel sheets and highlights differences in a new Excel file.
+    
+    Args:
+        file1_path (str): Path to "before" Excel file
+        file2_path (str): Path to "after" Excel file
+        output_path (str): Path for output Excel file
+        sheet_name (str): Optional specific sheet name to compare
+    """
+    # Read Excel files
+    xl1 = pd.ExcelFile(file1_path)
+    xl2 = pd.ExcelFile(file2_path)
+    
+    # Determine sheets to compare
+    sheets = [sheet_name] if sheet_name else list(set(xl1.sheet_names) & set(xl2.sheet_names))
+    
+    # Create output workbook
+    wb = Workbook()
+    wb.remove(wb.active)  # Remove default sheet
+    
+    # Styling definitions
+    header_fill = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")
+    change_fill = PatternFill(start_color="FF6347", end_color="FF6347", fill_type="solid")
+    added_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+    removed_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+    bold_font = Font(bold=True)
+    
+    for sheet in sheets:
+        # Read data from both files
+        df1 = pd.read_excel(file1_path, sheet_name=sheet).fillna("")
+        df2 = pd.read_excel(file2_path, sheet_name=sheet).fillna("")
+        
+        # Create comparison worksheet
+        ws = wb.create_sheet(title=f"{sheet} Comparison")
+        
+        # Write headers
+        headers = ["Field", "Row", "Value Before", "Value After", "Status"]
+        for col_idx, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.fill = header_fill
+            cell.font = bold_font
+        
+        row_idx = 2
+        
+        # 1. Check for added/removed rows
+        merged = pd.merge(
+            df1, df2, 
+            how='outer', 
+            indicator=True,
+            left_on=list(df1.columns),
+            right_on=list(df2.columns)
+        )
+        
+        # Find unique rows
+        added_rows = merged[merged['_merge'] == 'right_only']
+        removed_rows = merged[merged['_merge'] == 'left_only']
+        
+        # Process added rows
+        for _, row in added_rows.iterrows():
+            for col in df2.columns:
+                ws.cell(row=row_idx, column=1, value=col)
+                ws.cell(row=row_idx, column=2, value=row_idx-1)
+                ws.cell(row=row_idx, column=3, value="")
+                ws.cell(row=row_idx, column=4, value=row[col])
+                status_cell = ws.cell(row=row_idx, column=5, value="ADDED")
+                status_cell.fill = added_fill
+                row_idx += 1
+        
+        # Process removed rows
+        for _, row in removed_rows.iterrows():
+            for col in df1.columns:
+                ws.cell(row=row_idx, column=1, value=col)
+                ws.cell(row=row_idx, column=2, value=row_idx-1)
+                ws.cell(row=row_idx, column=3, value=row[col])
+                ws.cell(row=row_idx, column=4, value="")
+                status_cell = ws.cell(row=row_idx, column=5, value="REMOVED")
+                status_cell.fill = removed_fill
+                row_idx += 1
+        
+        # 2. Compare cell-level changes in common rows
+        common_cols = list(set(df1.columns) & set(df2.columns))
+        for idx in range(min(len(df1), len(df2))):
+            for col in common_cols:
+                val1 = df1.at[idx, col] if idx < len(df1) else ""
+                val2 = df2.at[idx, col] if idx < len(df2) else ""
+                
+                if val1 != val2:
+                    ws.cell(row=row_idx, column=1, value=col)
+                    ws.cell(row=row_idx, column=2, value=idx+1)
+                    ws.cell(row=row_idx, column=3, value=val1)
+                    ws.cell(row=row_idx, column=4, value=val2)
+                    status_cell = ws.cell(row=row_idx, column=5, value="CHANGED")
+                    status_cell.fill = change_fill
+                    row_idx += 1
+        
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2) * 1.2
+            ws.column_dimensions[column[0].column_letter].width = adjusted_width
+    
+    # Save results
+    wb.save(output_path)
+    print(f"Comparison report saved to: {output_path}")
+
+# Example usage
+if __name__ == "__main__":
+    compare_excel_sheets(
+        file1_path="before_filter.xlsx",
+        file2_path="after_filter.xlsx",
+        output_path="comparison_report.xlsx"
+    )
