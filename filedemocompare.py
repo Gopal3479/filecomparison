@@ -7,7 +7,6 @@ from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 import os
 from datetime import datetime
-import re
 
 # Define highlighting styles
 HEADER_DIFF_FILL = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")  # Gold
@@ -37,7 +36,6 @@ class ExcelComparator:
         self.sheet1_name = tk.StringVar()
         self.sheet2_name = tk.StringVar()
         self.status = tk.StringVar(value="Ready to compare files")
-        self.concat_columns = []
         self.df1 = None
         self.df2 = None
         self.side_by_side_df = None
@@ -184,49 +182,6 @@ class ExcelComparator:
             width=30, 
             font=("Arial", 10)
         ).pack(side="left", padx=5, fill="x", expand=True)
-        
-        # Concatenation columns selection
-        concat_frame = tk.LabelFrame(
-            main_frame, 
-            text="String Columns for Row Matching", 
-            font=("Arial", 12, "bold"), 
-            bg="#f0f2f5", 
-            padx=10, 
-            pady=10
-        )
-        concat_frame.pack(fill="x", pady=(0, 15))
-        
-        concat_top_frame = tk.Frame(concat_frame, bg="#f0f2f5")
-        concat_top_frame.pack(fill="x", pady=5)
-        
-        tk.Label(
-            concat_top_frame, 
-            text="Select columns for concatenation key:", 
-            font=("Arial", 10), 
-            bg="#f0f2f5", 
-            width=25, 
-            anchor="w"
-        ).pack(side="left", padx=5)
-        
-        self.refresh_concat_btn = tk.Button(
-            concat_top_frame, 
-            text="Refresh Columns", 
-            command=self.refresh_concat_columns,
-            bg="#9b59b6", 
-            fg="white",
-            font=("Arial", 9, "bold")
-        )
-        self.refresh_concat_btn.pack(side="right", padx=5)
-        
-        self.concat_listbox = tk.Listbox(
-            concat_frame, 
-            selectmode=tk.MULTIPLE, 
-            width=50, 
-            height=6,
-            font=("Arial", 9)
-        )
-        self.concat_listbox.pack(fill="x", padx=5, pady=5)
-        self.concat_listbox.insert(tk.END, "Please load files and click 'Refresh Columns'")
         
         # Options section
         options_frame = tk.LabelFrame(
@@ -452,47 +407,20 @@ class ExcelComparator:
                 except:
                     self.sheet2_name.set("Sheet1")
     
-    def refresh_concat_columns(self):
-        """Refresh available string columns for concatenation"""
-        file1 = self.file1_path.get()
-        file2 = self.file2_path.get()
-        sheet1 = self.sheet1_name.get()
-        sheet2 = self.sheet2_name.get()
+    def get_all_string_columns(self, df1, df2):
+        """Get all string columns common to both dataframes"""
+        common_cols = list(set(df1.columns) & set(df2.columns))
+        string_cols = []
         
-        if not file1 or not file2:
-            messagebox.showerror("Error", "Please select both Excel files first")
-            return
+        for col in common_cols:
+            # Check if column is string type and not date
+            if (pd.api.types.is_string_dtype(df1[col]) and \
+               (pd.api.types.is_string_dtype(df2[col])) and \
+               (not pd.api.types.is_datetime64_any_dtype(df1[col])) and \
+               (not pd.api.types.is_datetime64_any_dtype(df2[col])):
+                string_cols.append(col)
         
-        try:
-            # Read data
-            self.df1 = pd.read_excel(file1, sheet_name=sheet1)
-            self.df2 = pd.read_excel(file2, sheet_name=sheet2)
-            
-            # Find common columns that are string type and not dates
-            common_cols = list(set(self.df1.columns) & set(self.df2.columns))
-            string_cols = []
-            
-            for col in common_cols:
-                # Check if column is string type and not date
-                if (pd.api.types.is_string_dtype(self.df1[col]) and 
-                    pd.api.types.is_string_dtype(self.df2[col]) and
-                    not pd.api.types.is_datetime64_any_dtype(self.df1[col]) and
-                    not pd.api.types.is_datetime64_any_dtype(self.df2[col])):
-                    string_cols.append(col)
-            
-            # Update listbox
-            self.concat_listbox.delete(0, tk.END)
-            for col in string_cols:
-                self.concat_listbox.insert(tk.END, col)
-                
-            if not string_cols:
-                self.concat_listbox.insert(tk.END, "No suitable string columns found")
-                
-            self.status.set(f"Found {len(string_cols)} string columns for concatenation")
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not read files:\n{str(e)}")
-            self.status.set("Error reading files")
+        return string_cols
     
     def are_equal(self, a, b):
         """Check if two values are equal, handling NaN cases"""
@@ -514,35 +442,30 @@ class ExcelComparator:
         # Get common columns
         common_cols = list(set(df1.columns) & set(df2.columns))
         
-        # Create concatenation keys if columns are selected
+        # Get all string columns for concatenation
+        string_cols = self.get_all_string_columns(df1, df2)
+        
+        # Create concatenation keys using all string columns
         concat_keys1 = {}
         concat_keys2 = {}
         
-        if self.concat_columns:
-            # Create concatenated keys
-            for idx, row in df1.iterrows():
-                key_parts = []
-                for col in self.concat_columns:
-                    if col in df1.columns and not self.is_date(row[col]):
-                        key_parts.append(str(row[col]))
-                concat_keys1[idx] = "_".join(key_parts) if key_parts else None
-            
-            for idx, row in df2.iterrows():
-                key_parts = []
-                for col in self.concat_columns:
-                    if col in df2.columns and not self.is_date(row[col]):
-                        key_parts.append(str(row[col]))
-                concat_keys2[idx] = "_".join(key_parts) if key_parts else None
-            
-            # Create sets of keys for matching
-            keys1_set = set(concat_keys1.values())
-            keys2_set = set(concat_keys2.values())
-        else:
-            # If no columns selected, use index as key
-            concat_keys1 = {idx: idx for idx in df1.index}
-            concat_keys2 = {idx: idx for idx in df2.index}
-            keys1_set = set(concat_keys1.values())
-            keys2_set = set(concat_keys2.values())
+        for idx, row in df1.iterrows():
+            key_parts = []
+            for col in string_cols:
+                if col in df1.columns and not self.is_date(row[col]):
+                    key_parts.append(str(row[col]))
+            concat_keys1[idx] = "_".join(key_parts) if key_parts else None
+        
+        for idx, row in df2.iterrows():
+            key_parts = []
+            for col in string_cols:
+                if col in df2.columns and not self.is_date(row[col]):
+                    key_parts.append(str(row[col]))
+            concat_keys2[idx] = "_".join(key_parts) if key_parts else None
+        
+        # Create sets of keys for matching
+        keys1_set = set(concat_keys1.values())
+        keys2_set = set(concat_keys2.values())
         
         # Prepare data for side-by-side comparison
         side_by_side_data = []
@@ -742,10 +665,6 @@ class ExcelComparator:
             messagebox.showerror("Error", "Please select both Excel files")
             return
         
-        # Get selected concatenation columns
-        self.concat_columns = [self.concat_listbox.get(i) 
-                              for i in self.concat_listbox.curselection()]
-        
         self.status.set("Reading files...")
         self.root.update()
         
@@ -765,8 +684,7 @@ class ExcelComparator:
             matched_count, unmatched1_count, unmatched2_count = self.create_side_by_side_sheet(df1, df2, output_wb)
             
             # 3. Row matching analysis
-            if self.concat_columns or True:  # Always create analysis
-                self.analyze_row_matches(df1, df2, output_wb, matched_count, unmatched1_count, unmatched2_count)
+            self.analyze_row_matches(df1, df2, output_wb, matched_count, unmatched1_count, unmatched2_count)
             
             # 4. Numerical differences
             if self.create_num_table.get():
@@ -850,6 +768,14 @@ class ExcelComparator:
         ws.append(["Rows Only in File2", unmatched2_count])
         ws.append([""])
         
+        # Get all string columns used for concatenation
+        string_cols = self.get_all_string_columns(df1, df2)
+        if string_cols:
+            ws.append(["Concatenation Key Details:"])
+            ws.append(["Columns used for matching:", ", ".join(string_cols)])
+            ws.append([""])
+            ws.append(["Note: Rows are considered matched if any row in File1 matches any row in File2 based on all string columns"])
+        
         # Apply styling to summary
         for row in ws.iter_rows(min_row=1, max_row=1):
             for cell in row:
@@ -858,13 +784,6 @@ class ExcelComparator:
         for row in ws.iter_rows(min_row=3, max_row=7):
             for cell in row:
                 cell.font = Font(bold=(cell.column == 1))
-        
-        # Add details if concatenation columns were used
-        if self.concat_columns:
-            ws.append(["Concatenation Key Details:"])
-            ws.append(["Columns used for matching:", ", ".join(self.concat_columns)])
-            ws.append([""])
-            ws.append(["Note: Rows are considered matched if any row in File1 matches any row in File2 based on the concatenated key"])
         
         # Auto-size columns
         for col in ws.columns:
