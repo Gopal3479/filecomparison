@@ -7,6 +7,7 @@ from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 import os
 from datetime import datetime
+import re
 
 # Define highlighting styles
 HEADER_DIFF_FILL = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")  # Gold
@@ -27,7 +28,7 @@ class ExcelComparator:
     def __init__(self, root):
         self.root = root
         self.root.title("Advanced Excel Data Comparison Tool")
-        self.root.geometry("1100x800")
+        self.root.geometry("900x700")
         self.root.configure(bg="#f0f2f5")
         
         # Initialize variables
@@ -293,7 +294,7 @@ class ExcelComparator:
         ).pack(side="left")
         tk.Label(
             header_legend, 
-            text="Column Header Differences", 
+            text="Column Differences", 
             font=("Arial", 9), 
             bg="#f0f2f5"
         ).pack(side="left", padx=5)
@@ -310,7 +311,7 @@ class ExcelComparator:
         ).pack(side="left")
         tk.Label(
             cell_legend, 
-            text="Cell Value Differences", 
+            text="Value Differences", 
             font=("Arial", 9), 
             bg="#f0f2f5"
         ).pack(side="left", padx=5)
@@ -327,7 +328,7 @@ class ExcelComparator:
         ).pack(side="left")
         tk.Label(
             row_match_legend, 
-            text="Row Matches", 
+            text="Matched Rows", 
             font=("Arial", 9), 
             bg="#f0f2f5"
         ).pack(side="left", padx=5)
@@ -344,7 +345,7 @@ class ExcelComparator:
         ).pack(side="left")
         tk.Label(
             row_missing_legend, 
-            text="Missing Rows", 
+            text="Unmatched Rows", 
             font=("Arial", 9), 
             bg="#f0f2f5"
         ).pack(side="left", padx=5)
@@ -362,23 +363,6 @@ class ExcelComparator:
         tk.Label(
             total_legend, 
             text="Total Row", 
-            font=("Arial", 9), 
-            bg="#f0f2f5"
-        ).pack(side="left", padx=5)
-        
-        # Header legend
-        header_bg_legend = tk.Frame(legend_inner, bg="#f0f2f5")
-        header_bg_legend.pack(side="left", padx=10)
-        tk.Label(
-            header_bg_legend, 
-            text="    ", 
-            bg="#D3D3D3", 
-            width=3, 
-            height=1
-        ).pack(side="left")
-        tk.Label(
-            header_bg_legend, 
-            text="Header Background", 
             font=("Arial", 9), 
             bg="#f0f2f5"
         ).pack(side="left", padx=5)
@@ -407,21 +391,6 @@ class ExcelComparator:
                 except:
                     self.sheet2_name.set("Sheet1")
     
-    def get_all_string_columns(self, df1, df2):
-        """Get all string columns common to both dataframes"""
-        common_cols = list(set(df1.columns) & set(df2.columns))
-        string_cols = []
-        
-        for col in common_cols:
-            # Check if column is string type and not date
-            if (pd.api.types.is_string_dtype(df1[col]) and \
-               (pd.api.types.is_string_dtype(df2[col])) and \
-               (not pd.api.types.is_datetime64_any_dtype(df1[col])) and \
-               (not pd.api.types.is_datetime64_any_dtype(df2[col])):
-                string_cols.append(col)
-        
-        return string_cols
-    
     def are_equal(self, a, b):
         """Check if two values are equal, handling NaN cases"""
         if pd.isna(a) and pd.isna(b):
@@ -434,6 +403,21 @@ class ExcelComparator:
         """Check if a value is a date"""
         return isinstance(value, (datetime, pd.Timestamp))
     
+    def get_string_columns(self, df):
+        """Get all string columns that are not dates"""
+        string_cols = []
+        for col in df.columns:
+            # Skip date columns
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                continue
+            
+            # Include string columns and object columns that are likely strings
+            if pd.api.types.is_string_dtype(df[col]) or \
+               (pd.api.types.is_object_dtype(df[col]) and 
+                all(isinstance(x, str) or pd.isna(x) for x in df[col].head(100))):
+                string_cols.append(col)
+        return string_cols
+    
     def create_side_by_side_sheet(self, df1, df2, output_wb):
         """Create side-by-side comparison sheet with totals and row matching"""
         # Create sheet
@@ -442,25 +426,33 @@ class ExcelComparator:
         # Get common columns
         common_cols = list(set(df1.columns) & set(df2.columns))
         
-        # Get all string columns for concatenation
-        string_cols = self.get_all_string_columns(df1, df2)
+        # Get all string columns (excluding dates)
+        str_cols1 = self.get_string_columns(df1)
+        str_cols2 = self.get_string_columns(df2)
+        all_str_cols = list(set(str_cols1) | set(str_cols2))
         
         # Create concatenation keys using all string columns
         concat_keys1 = {}
         concat_keys2 = {}
         
+        # Create keys for df1
         for idx, row in df1.iterrows():
             key_parts = []
-            for col in string_cols:
-                if col in df1.columns and not self.is_date(row[col]):
-                    key_parts.append(str(row[col]))
+            for col in all_str_cols:
+                if col in df1.columns:
+                    val = row[col]
+                    if pd.notna(val) and not self.is_date(val):
+                        key_parts.append(str(val))
             concat_keys1[idx] = "_".join(key_parts) if key_parts else None
         
+        # Create keys for df2
         for idx, row in df2.iterrows():
             key_parts = []
-            for col in string_cols:
-                if col in df2.columns and not self.is_date(row[col]):
-                    key_parts.append(str(row[col]))
+            for col in all_str_cols:
+                if col in df2.columns:
+                    val = row[col]
+                    if pd.notna(val) and not self.is_date(val):
+                        key_parts.append(str(val))
             concat_keys2[idx] = "_".join(key_parts) if key_parts else None
         
         # Create sets of keys for matching
@@ -473,17 +465,18 @@ class ExcelComparator:
         # Create a mapping of keys to row indices
         key_to_df1 = {}
         for idx, key in concat_keys1.items():
-            if key is not None:
+            if key is not None and key != "":
                 key_to_df1.setdefault(key, []).append(idx)
         
         key_to_df2 = {}
         for idx, key in concat_keys2.items():
-            if key is not None:
+            if key is not None and key != "":
                 key_to_df2.setdefault(key, []).append(idx)
         
         # Find all unique keys
         all_keys = set(list(concat_keys1.values()) + list(concat_keys2.values()))
         all_keys.discard(None)
+        all_keys.discard("")
         
         # Process each key to find matches
         matched_rows = []
@@ -575,10 +568,6 @@ class ExcelComparator:
         ws.cell(row=1, column=len(df1.columns)+1).value = "File2"
         ws.cell(row=1, column=len(df1.columns)+1).alignment = Alignment(horizontal='center')
         
-        # Write data
-        for _, row in self.side_by_side_df.iterrows():
-            ws.append(row.tolist())
-        
         # Add totals row if enabled
         if self.create_totals.get():
             totals_row = []
@@ -608,8 +597,16 @@ class ExcelComparator:
                 cell.font = Font(bold=True)
                 cell.border = THIN_BORDER
         
+        # Write data
+        for _, row in self.side_by_side_df.iterrows():
+            ws.append(row.tolist())
+        
         # Apply styling and formatting
         for row_idx, row in enumerate(ws.iter_rows(min_row=3, max_row=ws.max_row), 3):
+            # Skip totals row
+            if self.create_totals.get() and row_idx == 3:
+                continue
+                
             match_status = ws.cell(row=row_idx, column=len(col_names)).value
             
             # Apply row matching highlighting
@@ -768,13 +765,11 @@ class ExcelComparator:
         ws.append(["Rows Only in File2", unmatched2_count])
         ws.append([""])
         
-        # Get all string columns used for concatenation
-        string_cols = self.get_all_string_columns(df1, df2)
-        if string_cols:
-            ws.append(["Concatenation Key Details:"])
-            ws.append(["Columns used for matching:", ", ".join(string_cols)])
-            ws.append([""])
-            ws.append(["Note: Rows are considered matched if any row in File1 matches any row in File2 based on all string columns"])
+        # Key generation method
+        ws.append(["Key Generation Method:"])
+        ws.append(["Automatically concatenated all non-date string columns"])
+        ws.append([""])
+        ws.append(["Note: Rows are considered matched if any row in File1 matches any row in File2"])
         
         # Apply styling to summary
         for row in ws.iter_rows(min_row=1, max_row=1):
