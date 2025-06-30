@@ -1,871 +1,312 @@
-import pandas as pd
-import numpy as np
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
-from openpyxl.utils import get_column_letter
+from tkinter import filedialog, messagebox, ttk
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.utils.dataframe import dataframe_to_rows
+import threading
 import os
-from datetime import datetime
 
-# Define highlighting styles
-HEADER_DIFF_FILL = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")  # Gold
-CELL_DIFF_FILL = PatternFill(start_color="FF6347", end_color="FF6347", fill_type="solid")    # Tomato
-NUM_DIFF_FILL = PatternFill(start_color="87CEFA", end_color="87CEFA", fill_type="solid")     # Light Sky Blue
-ROW_MATCH_FILL = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")    # Light Green
-ROW_MISSING_FILL = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")  # Light Gray
-TOTAL_FILL = PatternFill(start_color="E6E6FA", end_color="E6E6FA", fill_type="solid")        # Lavender
-HEADER_FILL = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")       # Light Gray
-
-# Border style
-THIN_BORDER = Border(left=Side(style='thin'), 
-                     right=Side(style='thin'), 
-                     top=Side(style='thin'), 
-                     bottom=Side(style='thin'))
-
-class ExcelComparator:
+class ExcelComparatorApp:
+    """
+    A desktop application for comparing two Excel files with advanced features.
+    """
     def __init__(self, root):
         self.root = root
-        self.root.title("Advanced Excel Data Comparison Tool")
-        self.root.geometry("900x700")
-        self.root.configure(bg="#f0f2f5")
-        
-        # Initialize variables
+        self.root.title("Advanced Excel Comparison Tool")
+        self.root.geometry("600x450")
+        self.root.configure(bg="#f0f0f0")
+
         self.file1_path = tk.StringVar()
         self.file2_path = tk.StringVar()
-        self.sheet1_name = tk.StringVar()
-        self.sheet2_name = tk.StringVar()
-        self.status = tk.StringVar(value="Ready to compare files")
-        self.df1 = None
-        self.df2 = None
-        self.side_by_side_df = None
-        
-        # Create UI
+
         self.create_widgets()
-        
+
     def create_widgets(self):
-        # Header frame
-        header_frame = tk.Frame(self.root, bg="#2c3e50", height=80)
-        header_frame.pack(fill="x", side="top")
+        """Creates and places all the UI widgets in the main window."""
+        main_frame = tk.Frame(self.root, bg="#f0f0f0", padx=20, pady=20)
+        main_frame.pack(expand=True, fill=tk.BOTH)
+
+        # --- Title ---
+        title_label = tk.Label(main_frame, text="Advanced Excel Comparison Tool", font=("Helvetica", 18, "bold"), bg="#f0f0f0")
+        title_label.pack(pady=(0, 20))
+
+        # --- File Selection ---
+        file1_frame = tk.LabelFrame(main_frame, text="Select File 1", padx=10, pady=10, bg="#f0f0f0", font=("Helvetica", 11))
+        file1_frame.pack(fill=tk.X, pady=10)
         
-        header_label = tk.Label(
-            header_frame, 
-            text="Advanced Excel Data Comparison Tool", 
-            font=("Arial", 20, "bold"), 
-            fg="white", 
-            bg="#2c3e50"
+        file1_entry = tk.Entry(file1_frame, textvariable=self.file1_path, state="readonly", width=50)
+        file1_entry.pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=4)
+        
+        browse1_btn = tk.Button(file1_frame, text="Browse...", command=lambda: self.browse_file(self.file1_path))
+        browse1_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        file2_frame = tk.LabelFrame(main_frame, text="Select File 2", padx=10, pady=10, bg="#f0f0f0", font=("Helvetica", 11))
+        file2_frame.pack(fill=tk.X, pady=10)
+
+        file2_entry = tk.Entry(file2_frame, textvariable=self.file2_path, state="readonly", width=50)
+        file2_entry.pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=4)
+        
+        browse2_btn = tk.Button(file2_frame, text="Browse...", command=lambda: self.browse_file(self.file2_path))
+        browse2_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+        # --- Compare Button ---
+        self.compare_btn = tk.Button(main_frame, text="Compare Excel Files", command=self.start_comparison_thread, font=("Helvetica", 12, "bold"), bg="#4a90e2", fg="white", relief=tk.RAISED)
+        self.compare_btn.pack(pady=20, ipady=8, fill=tk.X)
+
+        # --- Progress Bar and Status ---
+        self.progress_bar = ttk.Progressbar(main_frame, orient="horizontal", length=300, mode="determinate")
+        self.progress_bar.pack(pady=10, fill=tk.X)
+        self.status_label = tk.Label(main_frame, text="Select two files to begin.", bg="#f0f0f0", anchor="w")
+        self.status_label.pack(fill=tk.X)
+
+    def browse_file(self, path_var):
+        """Opens a file dialog to select an Excel file."""
+        filepath = filedialog.askopenfilename(
+            title="Select an Excel file",
+            filetypes=(("Excel Files", "*.xlsx *.xls"), ("All files", "*.*"))
         )
-        header_label.pack(pady=20)
-        
-        # Main content frame
-        main_frame = tk.Frame(self.root, bg="#f0f2f5")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # File selection section
-        file_frame = tk.LabelFrame(
-            main_frame, 
-            text="File Selection", 
-            font=("Arial", 12, "bold"), 
-            bg="#f0f2f5", 
-            padx=10, 
-            pady=10
-        )
-        file_frame.pack(fill="x", pady=(0, 15))
-        
-        # File 1
-        file1_frame = tk.Frame(file_frame, bg="#f0f2f5")
-        file1_frame.pack(fill="x", pady=5)
-        
-        tk.Label(
-            file1_frame, 
-            text="File 1:", 
-            font=("Arial", 10), 
-            bg="#f0f2f5", 
-            width=10, 
-            anchor="w"
-        ).pack(side="left")
-        
-        tk.Entry(
-            file1_frame, 
-            textvariable=self.file1_path, 
-            width=50, 
-            state="readonly",
-            font=("Arial", 10)
-        ).pack(side="left", padx=5, fill="x", expand=True)
-        
-        tk.Button(
-            file1_frame, 
-            text="Browse", 
-            command=lambda: self.select_file(1), 
-            bg="#3498db", 
-            fg="white",
-            font=("Arial", 10, "bold")
-        ).pack(side="left")
-        
-        # File 2
-        file2_frame = tk.Frame(file_frame, bg="#f0f2f5")
-        file2_frame.pack(fill="x", pady=5)
-        
-        tk.Label(
-            file2_frame, 
-            text="File 2:", 
-            font=("Arial", 10), 
-            bg="#f0f2f5", 
-            width=10, 
-            anchor="w"
-        ).pack(side="left")
-        
-        tk.Entry(
-            file2_frame, 
-            textvariable=self.file2_path, 
-            width=50, 
-            state="readonly",
-            font=("Arial", 10)
-        ).pack(side="left", padx=5, fill="x", expand=True)
-        
-        tk.Button(
-            file2_frame, 
-            text="Browse", 
-            command=lambda: self.select_file(2), 
-            bg="#3498db", 
-            fg="white",
-            font=("Arial", 10, "bold")
-        ).pack(side="left")
-        
-        # Sheet selection section
-        sheet_frame = tk.LabelFrame(
-            main_frame, 
-            text="Sheet Selection", 
-            font=("Arial", 12, "bold"), 
-            bg="#f0f2f5", 
-            padx=10, 
-            pady=10
-        )
-        sheet_frame.pack(fill="x", pady=(0, 15))
-        
-        # Sheet 1
-        sheet1_frame = tk.Frame(sheet_frame, bg="#f0f2f5")
-        sheet1_frame.pack(fill="x", pady=5)
-        
-        tk.Label(
-            sheet1_frame, 
-            text="File 1 Sheet:", 
-            font=("Arial", 10), 
-            bg="#f0f2f5", 
-            width=15, 
-            anchor="w"
-        ).pack(side="left")
-        
-        tk.Entry(
-            sheet1_frame, 
-            textvariable=self.sheet1_name, 
-            width=30, 
-            font=("Arial", 10)
-        ).pack(side="left", padx=5, fill="x", expand=True)
-        
-        # Sheet 2
-        sheet2_frame = tk.Frame(sheet_frame, bg="#f0f2f5")
-        sheet2_frame.pack(fill="x", pady=5)
-        
-        tk.Label(
-            sheet2_frame, 
-            text="File 2 Sheet:", 
-            font=("Arial", 10), 
-            bg="#f0f2f5", 
-            width=15, 
-            anchor="w"
-        ).pack(side="left")
-        
-        tk.Entry(
-            sheet2_frame, 
-            textvariable=self.sheet2_name, 
-            width=30, 
-            font=("Arial", 10)
-        ).pack(side="left", padx=5, fill="x", expand=True)
-        
-        # Options section
-        options_frame = tk.LabelFrame(
-            main_frame, 
-            text="Comparison Options", 
-            font=("Arial", 12, "bold"), 
-            bg="#f0f2f5", 
-            padx=10, 
-            pady=10
-        )
-        options_frame.pack(fill="x", pady=(0, 15))
-        
-        self.highlight_missing = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            options_frame, 
-            text="Highlight missing columns", 
-            variable=self.highlight_missing, 
-            bg="#f0f2f5", 
-            font=("Arial", 10)
-        ).pack(anchor="w", pady=3)
-        
-        self.highlight_cell_diffs = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            options_frame, 
-            text="Highlight cell differences", 
-            variable=self.highlight_cell_diffs, 
-            bg="#f0f2f5", 
-            font=("Arial", 10)
-        ).pack(anchor="w", pady=3)
-        
-        self.highlight_row_matches = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            options_frame, 
-            text="Highlight row matches/mismatches", 
-            variable=self.highlight_row_matches, 
-            bg="#f0f2f5", 
-            font=("Arial", 10)
-        ).pack(anchor="w", pady=3)
-        
-        self.create_num_table = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            options_frame, 
-            text="Create numerical differences table", 
-            variable=self.create_num_table, 
-            bg="#f0f2f5", 
-            font=("Arial", 10)
-        ).pack(anchor="w", pady=3)
-        
-        self.create_totals = tk.BooleanVar(value=True)
-        tk.Checkbutton(
-            options_frame, 
-            text="Show totals for numerical columns", 
-            variable=self.create_totals, 
-            bg="#f0f2f5", 
-            font=("Arial", 10)
-        ).pack(anchor="w", pady=3)
-        
-        # Action buttons
-        button_frame = tk.Frame(main_frame, bg="#f0f2f5")
-        button_frame.pack(fill="x", pady=20)
-        
-        compare_btn = tk.Button(
-            button_frame, 
-            text="Compare Excel Files", 
-            command=self.compare_files, 
-            bg="#27ae60", 
-            fg="white",
-            font=("Arial", 12, "bold"),
-            height=2,
-            width=20
-        )
-        compare_btn.pack(pady=10)
-        
-        # Status bar
-        status_frame = tk.Frame(self.root, bg="#e0e0e0", height=30)
-        status_frame.pack(fill="x", side="bottom")
-        
-        tk.Label(
-            status_frame, 
-            textvariable=self.status, 
-            font=("Arial", 10), 
-            bg="#e0e0e0", 
-            anchor="w"
-        ).pack(side="left", padx=10)
-        
-        # Legend
-        legend_frame = tk.Frame(main_frame, bg="#f0f2f5")
-        legend_frame.pack(fill="x", pady=10)
-        
-        tk.Label(
-            legend_frame, 
-            text="Highlight Legend:", 
-            font=("Arial", 10, "bold"), 
-            bg="#f0f2f5"
-        ).pack(anchor="w")
-        
-        legend_inner = tk.Frame(legend_frame, bg="#f0f2f5")
-        legend_inner.pack(fill="x", pady=5)
-        
-        # Header diff legend
-        header_legend = tk.Frame(legend_inner, bg="#f0f2f5")
-        header_legend.pack(side="left", padx=10)
-        tk.Label(
-            header_legend, 
-            text="    ", 
-            bg="#FFD700", 
-            width=3, 
-            height=1
-        ).pack(side="left")
-        tk.Label(
-            header_legend, 
-            text="Column Differences", 
-            font=("Arial", 9), 
-            bg="#f0f2f5"
-        ).pack(side="left", padx=5)
-        
-        # Cell diff legend
-        cell_legend = tk.Frame(legend_inner, bg="#f0f2f5")
-        cell_legend.pack(side="left", padx=10)
-        tk.Label(
-            cell_legend, 
-            text="    ", 
-            bg="#FF6347", 
-            width=3, 
-            height=1
-        ).pack(side="left")
-        tk.Label(
-            cell_legend, 
-            text="Value Differences", 
-            font=("Arial", 9), 
-            bg="#f0f2f5"
-        ).pack(side="left", padx=5)
-        
-        # Row match legend
-        row_match_legend = tk.Frame(legend_inner, bg="#f0f2f5")
-        row_match_legend.pack(side="left", padx=10)
-        tk.Label(
-            row_match_legend, 
-            text="    ", 
-            bg="#90EE90", 
-            width=3, 
-            height=1
-        ).pack(side="left")
-        tk.Label(
-            row_match_legend, 
-            text="Matched Rows", 
-            font=("Arial", 9), 
-            bg="#f0f2f5"
-        ).pack(side="left", padx=5)
-        
-        # Row missing legend
-        row_missing_legend = tk.Frame(legend_inner, bg="#f0f2f5")
-        row_missing_legend.pack(side="left", padx=10)
-        tk.Label(
-            row_missing_legend, 
-            text="    ", 
-            bg="#D3D3D3", 
-            width=3, 
-            height=1
-        ).pack(side="left")
-        tk.Label(
-            row_missing_legend, 
-            text="Unmatched Rows", 
-            font=("Arial", 9), 
-            bg="#f0f2f5"
-        ).pack(side="left", padx=5)
-        
-        # Total legend
-        total_legend = tk.Frame(legend_inner, bg="#f0f2f5")
-        total_legend.pack(side="left", padx=10)
-        tk.Label(
-            total_legend, 
-            text="    ", 
-            bg="#E6E6FA", 
-            width=3, 
-            height=1
-        ).pack(side="left")
-        tk.Label(
-            total_legend, 
-            text="Total Row", 
-            font=("Arial", 9), 
-            bg="#f0f2f5"
-        ).pack(side="left", padx=5)
-    
-    def select_file(self, file_num):
-        file_path = filedialog.askopenfilename(
-            title=f"Select Excel File {file_num}",
-            filetypes=[("Excel files", "*.xlsx *.xls")]
-        )
-        
-        if file_path:
-            if file_num == 1:
-                self.file1_path.set(file_path)
-                try:
-                    wb = load_workbook(file_path, read_only=True)
-                    self.sheet1_name.set(wb.sheetnames[0])
-                    wb.close()
-                except:
-                    self.sheet1_name.set("Sheet1")
-            else:
-                self.file2_path.set(file_path)
-                try:
-                    wb = load_workbook(file_path, read_only=True)
-                    self.sheet2_name.set(wb.sheetnames[0])
-                    wb.close()
-                except:
-                    self.sheet2_name.set("Sheet1")
-    
-    def are_equal(self, a, b):
-        """Check if two values are equal, handling NaN cases"""
-        if pd.isna(a) and pd.isna(b):
-            return True
-        if pd.isna(a) or pd.isna(b):
-            return False
-        return a == b
-    
-    def is_date(self, value):
-        """Check if a value is a date"""
-        return isinstance(value, (datetime, pd.Timestamp))
-    
-    def get_string_columns(self, df):
-        """Get all string columns that are not dates"""
-        string_cols = []
-        for col in df.columns:
-            # Skip date columns
-            if pd.api.types.is_datetime64_any_dtype(df[col]):
-                continue
-            
-            # Include string columns and object columns that are likely strings
-            if pd.api.types.is_string_dtype(df[col]) or \
-               (pd.api.types.is_object_dtype(df[col]) and 
-                all(isinstance(x, str) or pd.isna(x) for x in df[col].head(100))):
-                string_cols.append(col)
-        return string_cols
-    
-    def create_side_by_side_sheet(self, df1, df2, output_wb):
-        """Create side-by-side comparison sheet with totals and row matching"""
-        # Create sheet
-        ws = output_wb.create_sheet("Side by Side Comparison")
-        
-        # Get common columns
-        common_cols = list(set(df1.columns) & set(df2.columns))
-        
-        # Get all string columns (excluding dates)
-        str_cols1 = self.get_string_columns(df1)
-        str_cols2 = self.get_string_columns(df2)
-        all_str_cols = list(set(str_cols1) | set(str_cols2))
-        
-        # Create concatenation keys using all string columns
-        concat_keys1 = {}
-        concat_keys2 = {}
-        
-        # Create keys for df1
-        for idx, row in df1.iterrows():
-            key_parts = []
-            for col in all_str_cols:
-                if col in df1.columns:
-                    val = row[col]
-                    if pd.notna(val) and not self.is_date(val):
-                        key_parts.append(str(val))
-            concat_keys1[idx] = "_".join(key_parts) if key_parts else None
-        
-        # Create keys for df2
-        for idx, row in df2.iterrows():
-            key_parts = []
-            for col in all_str_cols:
-                if col in df2.columns:
-                    val = row[col]
-                    if pd.notna(val) and not self.is_date(val):
-                        key_parts.append(str(val))
-            concat_keys2[idx] = "_".join(key_parts) if key_parts else None
-        
-        # Prepare data for side-by-side comparison
-        side_by_side_data = []
-        matched_pairs = []
-        matched_df1_indices = set()
-        matched_df2_indices = set()
-        
-        # Create a mapping of keys to row indices
-        key_to_df1 = {}
-        for idx, key in concat_keys1.items():
-            if key is not None and key != "":
-                key_to_df1.setdefault(key, []).append(idx)
-        
-        key_to_df2 = {}
-        for idx, key in concat_keys2.items():
-            if key is not None and key != "":
-                key_to_df2.setdefault(key, []).append(idx)
-        
-        # Find all unique keys
-        all_keys = set(list(concat_keys1.values()) + list(concat_keys2.values()))
-        all_keys.discard(None)
-        all_keys.discard("")
-        
-        # Process each key to find matches
-        for key in all_keys:
-            df1_rows = key_to_df1.get(key, [])
-            df2_rows = key_to_df2.get(key, [])
-            
-            # If we have at least one row in both files, it's a match
-            if df1_rows and df2_rows:
-                # Take the first matching row from each file
-                matched_pairs.append((df1_rows[0], df2_rows[0]))
-                matched_df1_indices.add(df1_rows[0])
-                matched_df2_indices.add(df2_rows[0])
-        
-        # Create list of unmatched rows
-        unmatched_df1 = [idx for idx in df1.index if idx not in matched_df1_indices]
-        unmatched_df2 = [idx for idx in df2.index if idx not in matched_df2_indices]
-        
-        # Prepare side-by-side data in correct order
-        # First add matched rows
-        for df1_idx, df2_idx in matched_pairs:
-            row_data = []
-            # Add File1 data
-            for col in df1.columns:
-                row_data.append(df1.at[df1_idx, col])
-            # Add File2 data
-            for col in df2.columns:
-                row_data.append(df2.at[df2_idx, col])
-            row_data.append("Matched")
-            side_by_side_data.append(row_data)
-        
-        # Then add unmatched from File1
-        for idx in unmatched_df1:
-            row_data = []
-            # Add File1 data
-            for col in df1.columns:
-                row_data.append(df1.at[idx, col])
-            # Add blank for File2
-            for _ in df2.columns:
-                row_data.append(None)
-            row_data.append("Not Matched (File1)")
-            side_by_side_data.append(row_data)
-        
-        # Then add unmatched from File2
-        for idx in unmatched_df2:
-            row_data = []
-            # Add blank for File1
-            for _ in df1.columns:
-                row_data.append(None)
-            # Add File2 data
-            for col in df2.columns:
-                row_data.append(df2.at[idx, col])
-            row_data.append("Not Matched (File2)")
-            side_by_side_data.append(row_data)
-        
-        # Create DataFrame for side-by-side view
-        columns = [f"File1_{col}" for col in df1.columns] + \
-                  [f"File2_{col}" for col in df2.columns] + \
-                  ["Match Status"]
-        self.side_by_side_df = pd.DataFrame(side_by_side_data, columns=columns)
-        
-        # Write headers
-        header_row = ["File1"] * len(df1.columns) + ["File2"] * len(df2.columns) + [""]
-        ws.append(header_row)
-        
-        col_names = [col for col in df1.columns] + [col for col in df2.columns] + ["Match Status"]
-        ws.append(col_names)
-        
-        # Apply header styling
-        for row in ws.iter_rows(min_row=1, max_row=2, max_col=len(col_names)):
-            for cell in row:
-                cell.fill = HEADER_FILL
-                cell.font = Font(bold=True)
-                cell.border = THIN_BORDER
-        
-        # Merge header cells
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(df1.columns))
-        ws.merge_cells(start_row=1, start_column=len(df1.columns)+1, 
-                      end_row=1, end_column=len(df1.columns)+len(df2.columns))
-        
-        # Set alignment for merged headers
-        ws.cell(row=1, column=1).value = "File1"
-        ws.cell(row=1, column=1).alignment = Alignment(horizontal='center')
-        ws.cell(row=1, column=len(df1.columns)+1).value = "File2"
-        ws.cell(row=1, column=len(df1.columns)+1).alignment = Alignment(horizontal='center')
-        
-        # Add totals row if enabled
-        if self.create_totals.get():
-            totals_row = []
-            
-            # File1 totals
-            for col in df1.columns:
-                if pd.api.types.is_numeric_dtype(df1[col]):
-                    totals_row.append(df1[col].sum())
-                else:
-                    totals_row.append("")
-            
-            # File2 totals
-            for col in df2.columns:
-                if pd.api.types.is_numeric_dtype(df2[col]):
-                    totals_row.append(df2[col].sum())
-                else:
-                    totals_row.append("")
-            
-            totals_row.append("Totals")
-            ws.append(totals_row)
-            
-            # Apply styling to totals row
-            totals_row_num = ws.max_row
-            for col_idx in range(1, len(totals_row) + 1):
-                cell = ws.cell(row=totals_row_num, column=col_idx)
-                cell.fill = TOTAL_FILL
-                cell.font = Font(bold=True)
-                cell.border = THIN_BORDER
-        
-        # Write data
-        for _, row in self.side_by_side_df.iterrows():
-            ws.append(row.tolist())
-        
-        # Apply styling and formatting
-        for row_idx, row in enumerate(ws.iter_rows(min_row=3, max_row=ws.max_row), 3):
-            # Skip totals row
-            if self.create_totals.get() and row_idx == 3:
-                continue
-                
-            match_status = ws.cell(row=row_idx, column=len(col_names)).value
-            
-            # Apply row matching highlighting
-            if self.highlight_row_matches.get():
-                if match_status == "Matched":
-                    for cell in row:
-                        cell.fill = ROW_MATCH_FILL
-                elif "Not Matched" in match_status:
-                    for cell in row:
-                        cell.fill = ROW_MISSING_FILL
-            
-            # Apply cell difference highlighting
-            if self.highlight_cell_diffs.get() and match_status == "Matched":
-                # Only compare common columns for matched rows
-                for col_idx, col_name in enumerate(df1.columns, 1):
-                    if col_name in common_cols:
-                        file1_val = ws.cell(row=row_idx, column=col_idx).value
-                        file2_val = ws.cell(row=row_idx, column=col_idx + len(df1.columns)).value
-                        
-                        if not self.are_equal(file1_val, file2_val):
-                            ws.cell(row=row_idx, column=col_idx).fill = CELL_DIFF_FILL
-                            ws.cell(row=row_idx, column=col_idx + len(df1.columns)).fill = CELL_DIFF_FILL
-            
-            # Apply borders
-            for cell in row:
-                cell.border = THIN_BORDER
-        
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, len(col_names) + 1):
-            max_length = 0
-            col_letter = get_column_letter(col_idx)
-            
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
-                for cell in row:
-                    try:
-                        if cell.value is not None:
-                            cell_length = len(str(cell.value))
-                            if cell_length > max_length:
-                                max_length = cell_length
-                    except:
-                        pass
-            
-            adjusted_width = (max_length + 2) * 1.2
-            ws.column_dimensions[col_letter].width = adjusted_width
-        
-        # Freeze panes
-        ws.freeze_panes = "C3"
-        
-        return len(matched_pairs), len(unmatched_df1), len(unmatched_df2)
-    
-    def compare_files(self):
-        file1 = self.file1_path.get()
-        file2 = self.file2_path.get()
-        sheet1 = self.sheet1_name.get()
-        sheet2 = self.sheet2_name.get()
-        
-        if not file1 or not file2:
-            messagebox.showerror("Error", "Please select both Excel files")
+        if filepath:
+            path_var.set(filepath)
+            self.status_label.config(text="File selected. Ready to compare.")
+
+    def start_comparison_thread(self):
+        """Starts the comparison process in a separate thread to keep the UI responsive."""
+        if not self.file1_path.get() or not self.file2_path.get():
+            messagebox.showerror("Error", "Please select both files before comparing.")
             return
+
+        self.compare_btn.config(state=tk.DISABLED)
+        self.progress_bar['value'] = 0
         
-        self.status.set("Reading files...")
-        self.root.update()
+        # Run the comparison in a new thread
+        comparison_thread = threading.Thread(target=self.run_comparison)
+        comparison_thread.daemon = True
+        comparison_thread.start()
+
+    def update_status(self, message, progress):
+        """Updates the status label and progress bar from the main thread."""
+        self.status_label.config(text=message)
+        self.progress_bar['value'] = progress
+        self.root.update_idletasks()
         
+    def run_comparison(self):
+        """The core logic for the Excel file comparison."""
         try:
-            # Read data
-            df1 = pd.read_excel(file1, sheet_name=sheet1)
-            df2 = pd.read_excel(file2, sheet_name=sheet2)
+            self.update_status("Initializing...", 5)
             
-            # Create comparison workbook
-            output_wb = Workbook()
-            output_wb.remove(output_wb.active)
+            # --- 1. Read Files ---
+            self.update_status("Reading File 1...", 10)
+            df1, headers1 = self.read_excel_file(self.file1_path.get())
+            self.update_status("Reading File 2...", 20)
+            df2, headers2 = self.read_excel_file(self.file2_path.get())
+
+            if df1.empty or df2.empty:
+                raise ValueError("One or both Excel files appear to be empty or could not be read.")
+
+            # --- 2. Header Comparison ---
+            self.update_status("Comparing headers...", 30)
+            header_comp_df = self.compare_headers(headers1, headers2)
+
+            # --- 3. Smart Column & Key Generation ---
+            self.update_status("Identifying key columns...", 40)
+            key_columns = self.find_key_columns(df1, headers1)
+            if not key_columns:
+                raise ValueError("No suitable non-date string columns found for matching.")
             
-            # 1. Compare headers
-            self.compare_headers(df1, df2, output_wb)
+            self.update_status("Creating matching keys...", 50)
+            df1['__key'] = self.create_concatenated_key(df1, key_columns)
+            df2['__key'] = self.create_concatenated_key(df2, key_columns)
+
+            # --- 4. Numerical Column Identification and Totals ---
+            self.update_status("Calculating numerical totals...", 60)
+            numeric_cols1 = self.find_numeric_columns(df1)
+            numeric_cols2 = self.find_numeric_columns(df2)
+            totals1 = df1[numeric_cols1].sum()
+            totals2 = df2[numeric_cols2].sum()
             
-            # 2. Create side-by-side comparison sheet
-            matched_count, unmatched1_count, unmatched2_count = self.create_side_by_side_sheet(df1, df2, output_wb)
+            # --- 5. Side-by-Side and Row Matching ---
+            self.update_status("Performing side-by-side comparison...", 70)
+            side_by_side_df, row_matching_df = self.create_comparison_data(df1, df2, headers1, headers2)
+
+            # --- 6. Generate Excel Report ---
+            self.update_status("Generating results file...", 80)
+            self.generate_excel_report(header_comp_df, side_by_side_df, row_matching_df, totals1, totals2, headers1, headers2)
             
-            # 3. Row matching analysis
-            self.analyze_row_matches(df1, df2, output_wb, matched_count, unmatched1_count, unmatched2_count)
-            
-            # 4. Numerical differences
-            if self.create_num_table.get():
-                self.compare_numeric_values(df1, df2, output_wb)
-            
-            # Save results
-            output_file = filedialog.asksaveasfilename(
-                defaultextension=".xlsx",
-                filetypes=[("Excel files", "*.xlsx")],
-                title="Save Comparison Results"
-            )
-            
-            if output_file:
-                output_wb.save(output_file)
-                self.status.set(f"Comparison saved to: {output_file}")
-                messagebox.showinfo("Success", f"Comparison saved successfully!\n{output_file}")
-            else:
-                self.status.set("Comparison canceled")
-                
+            self.update_status("Comparison complete! Report saved.", 100)
+            messagebox.showinfo("Success", "Comparison finished successfully. The report 'Excel_Comparison_Report.xlsx' has been saved.")
+
         except Exception as e:
-            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
-            self.status.set("Error occurred - see details in message")
-    
-    def compare_headers(self, df1, df2, output_wb):
-        """Compare and highlight header differences"""
-        headers1 = set(df1.columns)
-        headers2 = set(df2.columns)
-        common = headers1 & headers2
-        unique1 = headers1 - headers2
-        unique2 = headers2 - headers1
+            self.update_status("Error occurred.", 0)
+            messagebox.showerror("Error", f"An error occurred: {e}")
+        finally:
+            self.compare_btn.config(state=tk.NORMAL)
+
+    def read_excel_file(self, path):
+        """Reads an excel file, finds the header, and filters out total rows."""
+        df = pd.read_excel(path, header=None)
         
-        # Create header comparison sheet
-        ws = output_wb.create_sheet("Header Comparison")
-        ws.append(["Header", "Status", "File 1 Presence", "File 2 Presence"])
+        # Find header row (first row with non-empty values)
+        header_row_index = 0
+        for i, row in df.iterrows():
+            if not row.isnull().all():
+                header_row_index = i
+                break
         
-        # Add common headers
-        for header in sorted(common):
-            ws.append([header, "Common", "✓", "✓"])
+        headers = list(df.iloc[header_row_index])
+        df.columns = headers
+        df = df.iloc[header_row_index + 1:].reset_index(drop=True)
         
-        # Add unique headers if option is enabled
-        if self.highlight_missing.get():
-            for header in sorted(unique1):
-                ws.append([header, "Unique to File 1", "✓", ""])
-                ws.cell(ws.max_row, 1).fill = HEADER_DIFF_FILL
+        # Find 'Total' row and cut off data from there
+        total_row_index = -1
+        if not df.empty and df.columns[0] is not None:
+             # Find 'Total' row and cut off data from there
+            total_rows = df[df.iloc[:, 0].astype(str).str.strip().str.lower().str.startswith('total', na=False)]
+            if not total_rows.empty:
+                total_row_index = total_rows.index[0]
+                df = df.iloc[:total_row_index]
+
+        return df.fillna(''), headers
+
+    def compare_headers(self, headers1, headers2):
+        """Compares the headers of the two files."""
+        h1_set = set(headers1)
+        h2_set = set(headers2)
+        common = sorted(list(h1_set.intersection(h2_set)))
+        only_in_1 = sorted(list(h1_set - h2_set))
+        only_in_2 = sorted(list(h2_set - h1_set))
+
+        data = []
+        for h in common: data.append(("Common", h))
+        for h in only_in_1: data.append(("Only in File 1", h))
+        for h in only_in_2: data.append(("Only in File 2", h))
+        
+        return pd.DataFrame(data, columns=["Status", "Column Name"])
+
+    def find_key_columns(self, df, headers):
+        """Finds non-date string columns to use for key generation."""
+        key_cols = []
+        # Attempt to convert object columns to datetime to identify date-like columns
+        for col in headers:
+            if df[col].dtype == 'object':
+                try:
+                    # If a significant portion can be converted to datetime, treat it as a date column.
+                    if pd.to_datetime(df[col], errors='coerce').notna().sum() / len(df) < 0.8:
+                        key_cols.append(col)
+                except Exception:
+                     key_cols.append(col)
+        return key_cols
+
+    def create_concatenated_key(self, df, key_columns):
+        """Creates a single key by concatenating string columns."""
+        return df[key_columns].astype(str).apply(lambda x: '|'.join(x.str.strip()), axis=1)
+
+    def find_numeric_columns(self, df):
+        """Identifies numeric columns in the DataFrame."""
+        return df.select_dtypes(include='number').columns.tolist()
+
+    def create_comparison_data(self, df1, df2, headers1, headers2):
+        """Merges dataframes and creates side-by-side and row analysis data."""
+        # Add file suffixes to original columns
+        df1_renamed = df1.rename(columns={c: f"File1: {c}" for c in headers1})
+        df2_renamed = df2.rename(columns={c: f"File2: {c}" for c in headers2})
+
+        # Perform an outer merge on the key
+        merged_df = pd.merge(df1_renamed, df2_renamed, left_on='File1: __key', right_on='File2: __key', how='outer')
+        merged_df.fillna('', inplace=True)
+        
+        # --- Create Side-by-Side Data ---
+        def get_status(row):
+            key1 = row['File1: __key']
+            key2 = row['File2: __key']
+            if key1 and key2: return "Matched"
+            if key1: return "Not Matched (File1)"
+            return "Not Matched (File2)"
+
+        merged_df['Match Status'] = merged_df.apply(get_status, axis=1)
+        
+        side_by_side_cols = ['Match Status'] + [f"File1: {h}" for h in headers1] + [f"File2: {h}" for h in headers2]
+        side_by_side_df = merged_df[side_by_side_cols]
+
+        # --- Create Row Matching Analysis Data ---
+        row_analysis_data = []
+        for _, row in merged_df.iterrows():
+            status = row['Match Status']
+            key = row['File1: __key'] if status != "Not Matched (File2)" else row['File2: __key']
+            if status == "Matched":
+                row_analysis_data.append([status, key, "Both", "Row exists in both files."])
+            elif status == "Not Matched (File1)":
+                 row_analysis_data.append([status, key, "File 1", "Row only exists in File 1."])
+            else:
+                 row_analysis_data.append([status, key, "File 2", "Row only exists in File 2."])
+        
+        row_matching_df = pd.DataFrame(row_analysis_data, columns=["Match Status", "Matching Key", "File", "Details"])
+        
+        return side_by_side_df, row_matching_df
+
+    def generate_excel_report(self, header_df, sbs_df, row_match_df, totals1, totals2, headers1, headers2):
+        """Creates and styles the final Excel report."""
+        output_path = "Excel_Comparison_Report.xlsx"
+        
+        # --- Define Styles ---
+        lavender_fill = PatternFill(start_color="E6E6FA", end_color="E6E6FA", fill_type="solid")
+        green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        gray_fill = PatternFill(start_color="C0C0C0", end_color="C0C0C0", fill_type="solid")
+        file1_header_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+        file2_header_fill = PatternFill(start_color="E2F0D9", end_color="E2F0D9", fill_type="solid")
+        bold_font = Font(bold=True)
+        
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            # --- Sheet 1: Side by Side Comparison ---
+            # Create totals row as a dataframe
+            totals_data = {"Match Status": "NUMERICAL TOTALS"}
+            for h in headers1: totals_data[f"File1: {h}"] = totals1.get(h, "")
+            for h in headers2: totals_data[f"File2: {h}"] = totals2.get(h, "")
+            totals_df = pd.DataFrame([totals_data], columns=sbs_df.columns)
             
-            for header in sorted(unique2):
-                ws.append([header, "Unique to File 2", "", "✓"])
-                ws.cell(ws.max_row, 1).fill = HEADER_DIFF_FILL
-        
-        # Apply formatting
-        for row in ws.iter_rows():
-            for cell in row:
-                cell.font = Font(bold=(cell.row == 1))
-                cell.border = THIN_BORDER
-        
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, 5):  # We have 4 columns in this sheet
-            max_length = 0
-            col_letter = get_column_letter(col_idx)
+            final_sbs_df = pd.concat([totals_df, sbs_df], ignore_index=True)
+            final_sbs_df.to_excel(writer, sheet_name="Side by Side Comparison", index=False)
+            ws_sbs = writer.sheets["Side by Side Comparison"]
             
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
-                for cell in row:
-                    try:
-                        if cell.value is not None:
-                            cell_length = len(str(cell.value))
-                            if cell_length > max_length:
-                                max_length = cell_length
-                    except:
-                        pass
+            # Apply styling to SBS sheet
+            # Style Totals row (row 2, as 1 is header)
+            for cell in ws_sbs[2]:
+                cell.fill = lavender_fill
+                cell.font = bold_font
+
+            # Style Headers (row 1)
+            for i, col_name in enumerate(final_sbs_df.columns, 1):
+                cell = ws_sbs.cell(row=1, column=i)
+                if str(col_name).startswith("File1:"): cell.fill = file1_header_fill
+                elif str(col_name).startswith("File2:"): cell.fill = file2_header_fill
+                cell.font = bold_font
+
+            # Style matched/unmatched rows
+            for r_idx, row in final_sbs_df.iloc[1:].iterrows(): # Skip totals row in df
+                status = row['Match Status']
+                fill = green_fill if status == "Matched" else gray_fill
+                for cell in ws_sbs[r_idx + 2]: # +2 to account for header and 0-indexing
+                    cell.fill = fill
             
-            adjusted_width = (max_length + 2) * 1.2
-            ws.column_dimensions[col_letter].width = adjusted_width
-    
-    def analyze_row_matches(self, df1, df2, output_wb, matched_count, unmatched1_count, unmatched2_count):
-        """Analyze and highlight row matches between files"""
-        # Create row matching sheet
-        ws = output_wb.create_sheet("Row Matching Analysis")
-        
-        # Summary section
-        ws.append(["Row Matching Summary"])
-        ws.append(["", ""])
-        ws.append(["Total Rows in File1", len(df1)])
-        ws.append(["Total Rows in File2", len(df2)])
-        ws.append(["Matched Rows", matched_count])
-        ws.append(["Rows Only in File1", unmatched1_count])
-        ws.append(["Rows Only in File2", unmatched2_count])
-        ws.append([""])
-        
-        # Key generation method
-        ws.append(["Key Generation Method:"])
-        ws.append(["Automatically concatenated all non-date string columns"])
-        ws.append([""])
-        ws.append(["Note: Rows are considered matched if any row in File1 matches any row in File2"])
-        
-        # Apply styling to summary
-        for row in ws.iter_rows(min_row=1, max_row=1):
-            for cell in row:
-                cell.font = Font(bold=True, size=14)
-        
-        for row in ws.iter_rows(min_row=3, max_row=7):
-            for cell in row:
-                cell.font = Font(bold=(cell.column == 1))
-        
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, 3):  # We have 2 columns in this sheet
-            max_length = 0
-            col_letter = get_column_letter(col_idx)
-            
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
-                for cell in row:
-                    try:
-                        if cell.value is not None:
-                            cell_length = len(str(cell.value))
-                            if cell_length > max_length:
-                                max_length = cell_length
-                    except:
-                        pass
-            
-            adjusted_width = (max_length + 2) * 1.2
-            ws.column_dimensions[col_letter].width = adjusted_width
-    
-    def compare_numeric_values(self, df1, df2, output_wb):
-        """Create numerical comparison table for common numeric columns"""
-        # Identify common numeric columns
-        common_cols = list(set(df1.columns) & set(df2.columns))
-        num_cols = [col for col in common_cols 
-                    if pd.api.types.is_numeric_dtype(df1[col]) and 
-                    pd.api.types.is_numeric_dtype(df2[col])]
-        
-        if not num_cols:
-            return
-        
-        # Create sheet
-        ws = output_wb.create_sheet("Numeric Comparison")
-        headers = ["Column", "Row", "File1 Value", "File2 Value", "Absolute Diff", "Relative Diff"]
-        ws.append(headers)
-        
-        # Apply header formatting
-        for cell in ws[1]:
-            cell.font = Font(bold=True)
-            cell.fill = HEADER_FILL
-            cell.border = THIN_BORDER
-        
-        # Compare values
-        for col in num_cols:
-            for i in range(min(len(df1), len(df2))):
-                val1 = df1[col].iloc[i]
-                val2 = df2[col].iloc[i]
-                
-                if pd.isna(val1) or pd.isna(val2) or val1 == val2:
-                    continue
-                    
-                abs_diff = abs(val1 - val2)
-                rel_diff = abs_diff / max(abs(val1), abs(val2)) if max(abs(val1), abs(val2)) != 0 else float('inf')
-                
-                ws.append([col, i+1, val1, val2, abs_diff, rel_diff])
-                
-                # Highlight significant differences (>10%)
-                if rel_diff > 0.1:
-                    for col_idx in range(1, 7):
-                        cell = ws.cell(ws.max_row, col_idx)
-                        cell.fill = NUM_DIFF_FILL
-                
-                # Apply borders
-                for col_idx in range(1, 7):
-                    cell = ws.cell(ws.max_row, col_idx)
-                    cell.border = THIN_BORDER
-        
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, 7):  # We have 6 columns in this sheet
-            max_length = 0
-            col_letter = get_column_letter(col_idx)
-            
-            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
-                for cell in row:
-                    try:
-                        if cell.value is not None:
-                            cell_length = len(str(cell.value))
-                            if cell_length > max_length:
-                                max_length = cell_length
-                    except:
-                        pass
-            
-            adjusted_width = (max_length + 2) * 1.2
-            ws.column_dimensions[col_letter].width = adjusted_width
+            # Set column widths
+            for i, col in enumerate(final_sbs_df.columns):
+                ws_sbs.column_dimensions[chr(65 + i)].width = 25
+
+            # --- Sheet 2: Header Comparison ---
+            header_df.to_excel(writer, sheet_name="Header Comparison", index=False)
+            ws_header = writer.sheets["Header Comparison"]
+            ws_header.column_dimensions['A'].width = 20
+            ws_header.column_dimensions['B'].width = 40
+
+            # --- Sheet 3: Row Matching Analysis ---
+            row_match_df.to_excel(writer, sheet_name="Row Matching Analysis", index=False)
+            ws_row = writer.sheets["Row Matching Analysis"]
+            ws_row.column_dimensions['A'].width = 20
+            ws_row.column_dimensions['B'].width = 40
+            ws_row.column_dimensions['C'].width = 15
+            ws_row.column_dimensions['D'].width = 50
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ExcelComparator(root)
+    app = ExcelComparatorApp(root)
     root.mainloop()
