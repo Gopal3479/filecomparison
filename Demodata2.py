@@ -7,7 +7,6 @@ from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 import os
 from datetime import datetime
-import re
 
 # Define highlighting styles
 HEADER_DIFF_FILL = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")  # Gold
@@ -455,12 +454,11 @@ class ExcelComparator:
                         key_parts.append(str(val))
             concat_keys2[idx] = "_".join(key_parts) if key_parts else None
         
-        # Create sets of keys for matching
-        keys1_set = set(concat_keys1.values())
-        keys2_set = set(concat_keys2.values())
-        
         # Prepare data for side-by-side comparison
         side_by_side_data = []
+        matched_pairs = []
+        matched_df1_indices = set()
+        matched_df2_indices = set()
         
         # Create a mapping of keys to row indices
         key_to_df1 = {}
@@ -479,7 +477,6 @@ class ExcelComparator:
         all_keys.discard("")
         
         # Process each key to find matches
-        matched_rows = []
         for key in all_keys:
             df1_rows = key_to_df1.get(key, [])
             df2_rows = key_to_df2.get(key, [])
@@ -487,22 +484,17 @@ class ExcelComparator:
             # If we have at least one row in both files, it's a match
             if df1_rows and df2_rows:
                 # Take the first matching row from each file
-                matched_rows.append((df1_rows[0], df2_rows[0]))
-        
-        # Create sets of matched indices
-        matched_df1_indices = set()
-        matched_df2_indices = set()
-        for df1_idx, df2_idx in matched_rows:
-            matched_df1_indices.add(df1_idx)
-            matched_df2_indices.add(df2_idx)
+                matched_pairs.append((df1_rows[0], df2_rows[0]))
+                matched_df1_indices.add(df1_rows[0])
+                matched_df2_indices.add(df2_rows[0])
         
         # Create list of unmatched rows
         unmatched_df1 = [idx for idx in df1.index if idx not in matched_df1_indices]
         unmatched_df2 = [idx for idx in df2.index if idx not in matched_df2_indices]
         
-        # Prepare side-by-side data
+        # Prepare side-by-side data in correct order
         # First add matched rows
-        for df1_idx, df2_idx in matched_rows:
+        for df1_idx, df2_idx in matched_pairs:
             row_data = []
             # Add File1 data
             for col in df1.columns:
@@ -655,7 +647,7 @@ class ExcelComparator:
         # Freeze panes
         ws.freeze_panes = "C3"
         
-        return len(matched_rows), len(unmatched_df1), len(unmatched_df2)
+        return len(matched_pairs), len(unmatched_df1), len(unmatched_df2)
     
     def compare_files(self):
         file1 = self.file1_path.get()
