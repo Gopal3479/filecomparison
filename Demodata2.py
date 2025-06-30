@@ -7,7 +7,7 @@ from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 import os
 from datetime import datetime
-import hashlib
+import re
 
 # Define highlighting styles
 HEADER_DIFF_FILL = PatternFill(start_color="FFD700", end_color="FFD700", fill_type="solid")  # Gold
@@ -27,7 +27,7 @@ THIN_BORDER = Border(left=Side(style='thin'),
 class ExcelComparator:
     def __init__(self, root):
         self.root = root
-        self.root.title("Excel Row Comparison Tool")
+        self.root.title("Advanced Excel Data Comparison Tool")
         self.root.geometry("900x700")
         self.root.configure(bg="#f0f2f5")
         
@@ -51,7 +51,7 @@ class ExcelComparator:
         
         header_label = tk.Label(
             header_frame, 
-            text="Excel Row Comparison Tool", 
+            text="Advanced Excel Data Comparison Tool", 
             font=("Arial", 20, "bold"), 
             fg="white", 
             bg="#2c3e50"
@@ -403,92 +403,143 @@ class ExcelComparator:
         """Check if a value is a date"""
         return isinstance(value, (datetime, pd.Timestamp))
     
-    def generate_row_hash(self, row, date_columns):
-        """Generate a hash for a row, excluding date columns"""
-        values = []
-        for col, val in row.items():
-            if col not in date_columns and not self.is_date(val) and not pd.isna(val):
-                values.append(str(val))
-        return hashlib.md5("|".join(values).encode()).hexdigest()
+    def get_string_columns(self, df):
+        """Get all string columns that are not dates"""
+        string_cols = []
+        for col in df.columns:
+            # Skip date columns
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                continue
+            
+            # Include string columns and object columns that are likely strings
+            if pd.api.types.is_string_dtype(df[col]) or \
+               (pd.api.types.is_object_dtype(df[col]) and 
+                all(isinstance(x, str) or pd.isna(x) for x in df[col].head(100))):
+                string_cols.append(col)
+        return string_cols
     
     def create_side_by_side_sheet(self, df1, df2, output_wb):
-        """Create side-by-side comparison sheet with row matching"""
+        """Create side-by-side comparison sheet with totals and row matching"""
         # Create sheet
         ws = output_wb.create_sheet("Side by Side Comparison")
         
         # Get common columns
         common_cols = list(set(df1.columns) & set(df2.columns))
         
-        # Identify date columns to exclude from matching
-        date_cols1 = [col for col in df1.columns if pd.api.types.is_datetime64_any_dtype(df1[col])]
-        date_cols2 = [col for col in df2.columns if pd.api.types.is_datetime64_any_dtype(df2[col])]
-        date_columns = set(date_cols1 + date_cols2)
+        # Get all string columns (excluding dates)
+        str_cols1 = self.get_string_columns(df1)
+        str_cols2 = self.get_string_columns(df2)
+        all_str_cols = list(set(str_cols1) | set(str_cols2))
         
-        # Create row hashes for matching (excluding date columns)
-        df1['row_hash'] = df1.apply(lambda row: self.generate_row_hash(row, date_columns), axis=1)
-        df2['row_hash'] = df2.apply(lambda row: self.generate_row_hash(row, date_columns), axis=1)
+        # Create concatenation keys using all string columns
+        concat_keys1 = {}
+        concat_keys2 = {}
         
-        # Create sets of hashes
-        hash1_set = set(df1['row_hash'])
-        hash2_set = set(df2['row_hash'])
+        # Create keys for df1
+        for idx, row in df1.iterrows():
+            key_parts = []
+            for col in all_str_cols:
+                if col in df1.columns:
+                    val = row[col]
+                    if pd.notna(val) and not self.is_date(val):
+                        key_parts.append(str(val))
+            concat_keys1[idx] = "_".join(key_parts) if key_parts else None
+        
+        # Create keys for df2
+        for idx, row in df2.iterrows():
+            key_parts = []
+            for col in all_str_cols:
+                if col in df2.columns:
+                    val = row[col]
+                    if pd.notna(val) and not self.is_date(val):
+                        key_parts.append(str(val))
+            concat_keys2[idx] = "_".join(key_parts) if key_parts else None
+        
+        # Create sets of keys for matching
+        keys1_set = set(concat_keys1.values())
+        keys2_set = set(concat_keys2.values())
         
         # Prepare data for side-by-side comparison
         side_by_side_data = []
-        matched_indices = set()
         
-        # Find matched rows (any row in df1 matches any row in df2)
-        for idx1, row1 in df1.iterrows():
-            if row1['row_hash'] in hash2_set:
-                # Find the first matching row in df2
-                match_idx = df2[df2['row_hash'] == row1['row_hash']].index[0]
-                matched_indices.add(idx1)
-                matched_indices.add(match_idx)
-                
-                row_data = []
-                # Add File1 data
-                for col in df1.columns:
-                    if col != 'row_hash':
-                        row_data.append(row1[col])
-                # Add File2 data
-                for col in df2.columns:
-                    if col != 'row_hash':
-                        row_data.append(df2.at[match_idx, col])
-                row_data.append("Matched")
-                side_by_side_data.append(row_data)
+        # Create a mapping of keys to row indices
+        key_to_df1 = {}
+        for idx, key in concat_keys1.items():
+            if key is not None and key != "":
+                key_to_df1.setdefault(key, []).append(idx)
         
-        # Add unmatched rows from df1
-        for idx, row in df1.iterrows():
-            if idx not in matched_indices:
-                row_data = []
-                # Add File1 data
-                for col in df1.columns:
-                    if col != 'row_hash':
-                        row_data.append(row[col])
-                # Add blank for File2
-                for _ in df2.columns:
-                    if _ != 'row_hash':
-                        row_data.append(None)
-                row_data.append("Not Matched (File1)")
-                side_by_side_data.append(row_data)
+        key_to_df2 = {}
+        for idx, key in concat_keys2.items():
+            if key is not None and key != "":
+                key_to_df2.setdefault(key, []).append(idx)
         
-        # Add unmatched rows from df2
-        for idx, row in df2.iterrows():
-            if idx not in matched_indices:
-                row_data = []
-                # Add blank for File1
-                for _ in df1.columns:
-                    if _ != 'row_hash':
-                        row_data.append(None)
-                # Add File2 data
-                for col in df2.columns:
-                    if col != 'row_hash':
-                        row_data.append(row[col])
-                row_data.append("Not Matched (File2)")
-                side_by_side_data.append(row_data)
+        # Find all unique keys
+        all_keys = set(list(concat_keys1.values()) + list(concat_keys2.values()))
+        all_keys.discard(None)
+        all_keys.discard("")
+        
+        # Process each key to find matches
+        matched_rows = []
+        for key in all_keys:
+            df1_rows = key_to_df1.get(key, [])
+            df2_rows = key_to_df2.get(key, [])
+            
+            # If we have at least one row in both files, it's a match
+            if df1_rows and df2_rows:
+                # Take the first matching row from each file
+                matched_rows.append((df1_rows[0], df2_rows[0]))
+        
+        # Create sets of matched indices
+        matched_df1_indices = set()
+        matched_df2_indices = set()
+        for df1_idx, df2_idx in matched_rows:
+            matched_df1_indices.add(df1_idx)
+            matched_df2_indices.add(df2_idx)
+        
+        # Create list of unmatched rows
+        unmatched_df1 = [idx for idx in df1.index if idx not in matched_df1_indices]
+        unmatched_df2 = [idx for idx in df2.index if idx not in matched_df2_indices]
+        
+        # Prepare side-by-side data
+        # First add matched rows
+        for df1_idx, df2_idx in matched_rows:
+            row_data = []
+            # Add File1 data
+            for col in df1.columns:
+                row_data.append(df1.at[df1_idx, col])
+            # Add File2 data
+            for col in df2.columns:
+                row_data.append(df2.at[df2_idx, col])
+            row_data.append("Matched")
+            side_by_side_data.append(row_data)
+        
+        # Then add unmatched from File1
+        for idx in unmatched_df1:
+            row_data = []
+            # Add File1 data
+            for col in df1.columns:
+                row_data.append(df1.at[idx, col])
+            # Add blank for File2
+            for _ in df2.columns:
+                row_data.append(None)
+            row_data.append("Not Matched (File1)")
+            side_by_side_data.append(row_data)
+        
+        # Then add unmatched from File2
+        for idx in unmatched_df2:
+            row_data = []
+            # Add blank for File1
+            for _ in df1.columns:
+                row_data.append(None)
+            # Add File2 data
+            for col in df2.columns:
+                row_data.append(df2.at[idx, col])
+            row_data.append("Not Matched (File2)")
+            side_by_side_data.append(row_data)
         
         # Create DataFrame for side-by-side view
-        columns = [f"File1_{col}" for col in df1.columns if col != 'row_hash'] + \
-                  [f"File2_{col}" for col in df2.columns if col != 'row_hash'] + \
+        columns = [f"File1_{col}" for col in df1.columns] + \
+                  [f"File2_{col}" for col in df2.columns] + \
                   ["Match Status"]
         self.side_by_side_df = pd.DataFrame(side_by_side_data, columns=columns)
         
@@ -496,9 +547,7 @@ class ExcelComparator:
         header_row = ["File1"] * len(df1.columns) + ["File2"] * len(df2.columns) + [""]
         ws.append(header_row)
         
-        col_names = [col for col in df1.columns if col != 'row_hash'] + \
-                    [col for col in df2.columns if col != 'row_hash'] + \
-                    ["Match Status"]
+        col_names = [col for col in df1.columns] + [col for col in df2.columns] + ["Match Status"]
         ws.append(col_names)
         
         # Apply header styling
@@ -509,44 +558,30 @@ class ExcelComparator:
                 cell.border = THIN_BORDER
         
         # Merge header cells
-        if len(df1.columns) > 0:
-            ws.merge_cells(
-                start_row=1, 
-                start_column=1, 
-                end_row=1, 
-                end_column=len(df1.columns)
-            )
-            file1_header = ws.cell(row=1, column=1)
-            file1_header.value = "File1"
-            file1_header.alignment = Alignment(horizontal='center')
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(df1.columns))
+        ws.merge_cells(start_row=1, start_column=len(df1.columns)+1, 
+                      end_row=1, end_column=len(df1.columns)+len(df2.columns))
         
-        if len(df2.columns) > 0:
-            start_col = len(df1.columns) + 1
-            end_col = len(df1.columns) + len(df2.columns)
-            ws.merge_cells(
-                start_row=1, 
-                start_column=start_col, 
-                end_row=1, 
-                end_column=end_col
-            )
-            file2_header = ws.cell(row=1, column=start_col)
-            file2_header.value = "File2"
-            file2_header.alignment = Alignment(horizontal='center')
+        # Set alignment for merged headers
+        ws.cell(row=1, column=1).value = "File1"
+        ws.cell(row=1, column=1).alignment = Alignment(horizontal='center')
+        ws.cell(row=1, column=len(df1.columns)+1).value = "File2"
+        ws.cell(row=1, column=len(df1.columns)+1).alignment = Alignment(horizontal='center')
         
-        # Add totals row at the top
+        # Add totals row if enabled
         if self.create_totals.get():
             totals_row = []
             
             # File1 totals
             for col in df1.columns:
-                if col != 'row_hash' and pd.api.types.is_numeric_dtype(df1[col]):
+                if pd.api.types.is_numeric_dtype(df1[col]):
                     totals_row.append(df1[col].sum())
                 else:
                     totals_row.append("")
             
             # File2 totals
             for col in df2.columns:
-                if col != 'row_hash' and pd.api.types.is_numeric_dtype(df2[col]):
+                if pd.api.types.is_numeric_dtype(df2[col]):
                     totals_row.append(df2[col].sum())
                 else:
                     totals_row.append("")
@@ -567,8 +602,11 @@ class ExcelComparator:
             ws.append(row.tolist())
         
         # Apply styling and formatting
-        start_row = 4 if self.create_totals.get() else 3
-        for row_idx, row in enumerate(ws.iter_rows(min_row=start_row, max_row=ws.max_row), start_row):
+        for row_idx, row in enumerate(ws.iter_rows(min_row=3, max_row=ws.max_row), 3):
+            # Skip totals row
+            if self.create_totals.get() and row_idx == 3:
+                continue
+                
             match_status = ws.cell(row=row_idx, column=len(col_names)).value
             
             # Apply row matching highlighting
@@ -596,28 +634,28 @@ class ExcelComparator:
             for cell in row:
                 cell.border = THIN_BORDER
         
-        # Auto-size columns
-        for col in ws.columns:
+        # Auto-size columns without merged cell error
+        for col_idx in range(1, len(col_names) + 1):
             max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if cell.value and len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
+            col_letter = get_column_letter(col_idx)
+            
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    try:
+                        if cell.value is not None:
+                            cell_length = len(str(cell.value))
+                            if cell_length > max_length:
+                                max_length = cell_length
+                    except:
+                        pass
+            
             adjusted_width = (max_length + 2) * 1.2
-            if adjusted_width > 0:
-                ws.column_dimensions[column].width = adjusted_width
+            ws.column_dimensions[col_letter].width = adjusted_width
         
         # Freeze panes
-        ws.freeze_panes = ws.cell(row=3, column=1)
+        ws.freeze_panes = "C3"
         
-        matched_count = len([x for x in side_by_side_data if x[-1] == "Matched"])
-        unmatched1_count = len([x for x in side_by_side_data if "File1" in x[-1]])
-        unmatched2_count = len([x for x in side_by_side_data if "File2" in x[-1]])
-        
-        return matched_count, unmatched1_count, unmatched2_count
+        return len(matched_rows), len(unmatched_df1), len(unmatched_df2)
     
     def compare_files(self):
         file1 = self.file1_path.get()
@@ -652,4 +690,190 @@ class ExcelComparator:
             
             # 4. Numerical differences
             if self.create_num_table.get():
-                self.compare_numeric_values(df1, df2,
+                self.compare_numeric_values(df1, df2, output_wb)
+            
+            # Save results
+            output_file = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")],
+                title="Save Comparison Results"
+            )
+            
+            if output_file:
+                output_wb.save(output_file)
+                self.status.set(f"Comparison saved to: {output_file}")
+                messagebox.showinfo("Success", f"Comparison saved successfully!\n{output_file}")
+            else:
+                self.status.set("Comparison canceled")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+            self.status.set("Error occurred - see details in message")
+    
+    def compare_headers(self, df1, df2, output_wb):
+        """Compare and highlight header differences"""
+        headers1 = set(df1.columns)
+        headers2 = set(df2.columns)
+        common = headers1 & headers2
+        unique1 = headers1 - headers2
+        unique2 = headers2 - headers1
+        
+        # Create header comparison sheet
+        ws = output_wb.create_sheet("Header Comparison")
+        ws.append(["Header", "Status", "File 1 Presence", "File 2 Presence"])
+        
+        # Add common headers
+        for header in sorted(common):
+            ws.append([header, "Common", "✓", "✓"])
+        
+        # Add unique headers if option is enabled
+        if self.highlight_missing.get():
+            for header in sorted(unique1):
+                ws.append([header, "Unique to File 1", "✓", ""])
+                ws.cell(ws.max_row, 1).fill = HEADER_DIFF_FILL
+            
+            for header in sorted(unique2):
+                ws.append([header, "Unique to File 2", "", "✓"])
+                ws.cell(ws.max_row, 1).fill = HEADER_DIFF_FILL
+        
+        # Apply formatting
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.font = Font(bold=(cell.row == 1))
+                cell.border = THIN_BORDER
+        
+        # Auto-size columns without merged cell error
+        for col_idx in range(1, 5):  # We have 4 columns in this sheet
+            max_length = 0
+            col_letter = get_column_letter(col_idx)
+            
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    try:
+                        if cell.value is not None:
+                            cell_length = len(str(cell.value))
+                            if cell_length > max_length:
+                                max_length = cell_length
+                    except:
+                        pass
+            
+            adjusted_width = (max_length + 2) * 1.2
+            ws.column_dimensions[col_letter].width = adjusted_width
+    
+    def analyze_row_matches(self, df1, df2, output_wb, matched_count, unmatched1_count, unmatched2_count):
+        """Analyze and highlight row matches between files"""
+        # Create row matching sheet
+        ws = output_wb.create_sheet("Row Matching Analysis")
+        
+        # Summary section
+        ws.append(["Row Matching Summary"])
+        ws.append(["", ""])
+        ws.append(["Total Rows in File1", len(df1)])
+        ws.append(["Total Rows in File2", len(df2)])
+        ws.append(["Matched Rows", matched_count])
+        ws.append(["Rows Only in File1", unmatched1_count])
+        ws.append(["Rows Only in File2", unmatched2_count])
+        ws.append([""])
+        
+        # Key generation method
+        ws.append(["Key Generation Method:"])
+        ws.append(["Automatically concatenated all non-date string columns"])
+        ws.append([""])
+        ws.append(["Note: Rows are considered matched if any row in File1 matches any row in File2"])
+        
+        # Apply styling to summary
+        for row in ws.iter_rows(min_row=1, max_row=1):
+            for cell in row:
+                cell.font = Font(bold=True, size=14)
+        
+        for row in ws.iter_rows(min_row=3, max_row=7):
+            for cell in row:
+                cell.font = Font(bold=(cell.column == 1))
+        
+        # Auto-size columns without merged cell error
+        for col_idx in range(1, 3):  # We have 2 columns in this sheet
+            max_length = 0
+            col_letter = get_column_letter(col_idx)
+            
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    try:
+                        if cell.value is not None:
+                            cell_length = len(str(cell.value))
+                            if cell_length > max_length:
+                                max_length = cell_length
+                    except:
+                        pass
+            
+            adjusted_width = (max_length + 2) * 1.2
+            ws.column_dimensions[col_letter].width = adjusted_width
+    
+    def compare_numeric_values(self, df1, df2, output_wb):
+        """Create numerical comparison table for common numeric columns"""
+        # Identify common numeric columns
+        common_cols = list(set(df1.columns) & set(df2.columns))
+        num_cols = [col for col in common_cols 
+                    if pd.api.types.is_numeric_dtype(df1[col]) and 
+                    pd.api.types.is_numeric_dtype(df2[col])]
+        
+        if not num_cols:
+            return
+        
+        # Create sheet
+        ws = output_wb.create_sheet("Numeric Comparison")
+        headers = ["Column", "Row", "File1 Value", "File2 Value", "Absolute Diff", "Relative Diff"]
+        ws.append(headers)
+        
+        # Apply header formatting
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = HEADER_FILL
+            cell.border = THIN_BORDER
+        
+        # Compare values
+        for col in num_cols:
+            for i in range(min(len(df1), len(df2))):
+                val1 = df1[col].iloc[i]
+                val2 = df2[col].iloc[i]
+                
+                if pd.isna(val1) or pd.isna(val2) or val1 == val2:
+                    continue
+                    
+                abs_diff = abs(val1 - val2)
+                rel_diff = abs_diff / max(abs(val1), abs(val2)) if max(abs(val1), abs(val2)) != 0 else float('inf')
+                
+                ws.append([col, i+1, val1, val2, abs_diff, rel_diff])
+                
+                # Highlight significant differences (>10%)
+                if rel_diff > 0.1:
+                    for col_idx in range(1, 7):
+                        cell = ws.cell(ws.max_row, col_idx)
+                        cell.fill = NUM_DIFF_FILL
+                
+                # Apply borders
+                for col_idx in range(1, 7):
+                    cell = ws.cell(ws.max_row, col_idx)
+                    cell.border = THIN_BORDER
+        
+        # Auto-size columns without merged cell error
+        for col_idx in range(1, 7):  # We have 6 columns in this sheet
+            max_length = 0
+            col_letter = get_column_letter(col_idx)
+            
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    try:
+                        if cell.value is not None:
+                            cell_length = len(str(cell.value))
+                            if cell_length > max_length:
+                                max_length = cell_length
+                    except:
+                        pass
+            
+            adjusted_width = (max_length + 2) * 1.2
+            ws.column_dimensions[col_letter].width = adjusted_width
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ExcelComparator(root)
+    root.mainloop()
