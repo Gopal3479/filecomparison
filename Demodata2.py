@@ -488,18 +488,38 @@ class ExcelComparator:
             if key is not None and key != "":
                 key_to_df2.setdefault(key, []).append(idx)
         
-        # Find matches
+        # Find matches - use the first matching row in each file
         for key in set(key_to_df1.keys()) & set(key_to_df2.keys()):
             df1_idx = key_to_df1[key][0]
             df2_idx = key_to_df2[key][0]
             file1_match_info[df1_idx] = df2_idx
             file2_match_info[df2_idx] = df1_idx
         
-        # Write headers
-        header_row = ["File1"] * (len(df1.columns) + 1) + [""] + ["File2"] * (len(df2.columns) + 1)
-        ws.append(header_row)
+        # Calculate column counts
+        n1 = len(df1.columns)
+        n2 = len(df2.columns)
         
-        col_names = [col for col in df1.columns] + ["File1 Match Status"] + [""] + [col for col in df2.columns] + ["File2 Match Status"]
+        # Write headers
+        # File1 header
+        ws.cell(row=1, column=1, value="File1").alignment = Alignment(horizontal='center')
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n1+1)  # +1 for match status
+        
+        # File2 header
+        start_col_file2 = n1 + 3  # Skip File1 match status and separator
+        ws.cell(row=1, column=start_col_file2, value="File2").alignment = Alignment(horizontal='center')
+        ws.merge_cells(start_row=1, start_column=start_col_file2, end_row=1, end_column=start_col_file2 + n2 + 1)  # +1 for match status
+        
+        # Write column names
+        col_names = []
+        # File1 part
+        col_names.extend(df1.columns.tolist())
+        col_names.append("File1 Match Status")
+        # Separator
+        col_names.append("")
+        # File2 part
+        col_names.extend(df2.columns.tolist())
+        col_names.append("File2 Match Status")
+        
         ws.append(col_names)
         
         # Apply header styling
@@ -509,37 +529,17 @@ class ExcelComparator:
                 cell.font = Font(bold=True)
                 cell.border = THIN_BORDER
         
-        # Merge header cells
-        ws.merge_cells(
-            start_row=1, 
-            start_column=1, 
-            end_row=1, 
-            end_column=len(df1.columns) + 1
-        )
-        ws.merge_cells(
-            start_row=1, 
-            start_column=len(df1.columns) + 3, 
-            end_row=1, 
-            end_column=len(col_names)
-        )
-        
-        # Set alignment for merged headers
-        ws.cell(row=1, column=1).value = "File1"
-        ws.cell(row=1, column=1).alignment = Alignment(horizontal='center')
-        ws.cell(row=1, column=len(df1.columns) + 3).value = "File2"
-        ws.cell(row=1, column=len(df1.columns) + 3).alignment = Alignment(horizontal='center')
-        
         # Add totals row if enabled
         if self.create_totals.get():
-            totals_row = [""] * (len(col_names))
+            totals_row = [""] * len(col_names)
             
             # File1 totals
-            for col_idx, col in enumerate(df1.columns, 1):
+            for col_idx, col in enumerate(df1.columns, 0):  # 0-based index
                 if pd.api.types.is_numeric_dtype(df1[col]):
-                    totals_row[col_idx - 1] = df1[col].sum()
+                    totals_row[col_idx] = df1[col].sum()
             
             # File2 totals
-            for col_idx, col in enumerate(df2.columns, len(df1.columns) + 3):
+            for col_idx, col in enumerate(df2.columns, n1 + 3):  # Start at File2 data
                 if pd.api.types.is_numeric_dtype(df2[col]):
                     totals_row[col_idx] = df2[col].sum()
             
@@ -566,7 +566,7 @@ class ExcelComparator:
                 
                 # File1 match status
                 if row_idx in file1_match_info:
-                    match_status = f"Matched with File2 row {file1_match_info[row_idx] + 1}"
+                    match_status = f"Matched with File2 row {file1_match_info[row_idx]}"
                 else:
                     match_status = "Not matched"
                 row_data.append(match_status)
@@ -583,7 +583,7 @@ class ExcelComparator:
                 
                 # File2 match status
                 if row_idx in file2_match_info:
-                    match_status = f"Matched with File1 row {file2_match_info[row_idx] + 1}"
+                    match_status = f"Matched with File1 row {file2_match_info[row_idx]}"
                 else:
                     match_status = "Not matched"
                 row_data.append(match_status)
@@ -593,46 +593,49 @@ class ExcelComparator:
             ws.append(row_data)
         
         # Apply styling and formatting
-        for row_idx, row in enumerate(ws.iter_rows(min_row=3, max_row=ws.max_row), 3):
-            # Skip totals row
-            if self.create_totals.get() and row_idx == 3:
-                continue
+        # Define status column positions
+        file1_status_col = n1 + 1
+        file2_status_col = n1 + 3 + n2 + 1  # Skip File1 data, status, separator, File2 data
+        
+        start_row = 3
+        if self.create_totals.get():
+            start_row = 4  # Skip totals row
             
+        for row_idx in range(start_row, ws.max_row + 1):
             # Apply row matching highlighting
             if self.highlight_row_matches.get():
                 # File1 match status
-                file1_status_col = len(df1.columns) + 1
                 file1_match_status = ws.cell(row=row_idx, column=file1_status_col).value
                 
                 # File2 match status
-                file2_status_col = len(df1.columns) + 3 + len(df2.columns) + 1
                 file2_match_status = ws.cell(row=row_idx, column=file2_status_col).value
                 
                 # Highlight File1 row if matched
                 if file1_match_status and "Matched" in file1_match_status:
-                    for col_idx in range(1, len(df1.columns) + 2):  # +1 for match status column
+                    for col_idx in range(1, n1 + 2):  # +1 for match status column
                         cell = ws.cell(row=row_idx, column=col_idx)
                         cell.fill = ROW_MATCH_FILL
                 elif file1_match_status and "Not matched" in file1_match_status:
-                    for col_idx in range(1, len(df1.columns) + 2):
+                    for col_idx in range(1, n1 + 2):
                         cell = ws.cell(row=row_idx, column=col_idx)
                         cell.fill = ROW_MISSING_FILL
                 
                 # Highlight File2 row if matched
                 if file2_match_status and "Matched" in file2_match_status:
-                    for col_idx in range(len(df1.columns) + 3, len(df1.columns) + 3 + len(df2.columns) + 1):
+                    for col_idx in range(n1 + 3, n1 + 3 + n2 + 1):  # File2 data + status
                         cell = ws.cell(row=row_idx, column=col_idx)
                         cell.fill = ROW_MATCH_FILL
                 elif file2_match_status and "Not matched" in file2_match_status:
-                    for col_idx in range(len(df1.columns) + 3, len(df1.columns) + 3 + len(df2.columns) + 1):
+                    for col_idx in range(n1 + 3, n1 + 3 + n2 + 1):
                         cell = ws.cell(row=row_idx, column=col_idx)
                         cell.fill = ROW_MISSING_FILL
             
             # Apply borders
-            for cell in row:
+            for col_idx in range(1, len(col_names) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
                 cell.border = THIN_BORDER
         
-        # Auto-size columns without merged cell error
+        # Auto-size columns
         for col_idx in range(1, len(col_names) + 1):
             max_length = 0
             col_letter = get_column_letter(col_idx)
@@ -744,8 +747,8 @@ class ExcelComparator:
                 cell.font = Font(bold=(cell.row == 1))
                 cell.border = THIN_BORDER
         
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, 5):  # We have 4 columns in this sheet
+        # Auto-size columns
+        for col_idx in range(1, 5):  # 4 columns
             max_length = 0
             col_letter = get_column_letter(col_idx)
             
@@ -792,8 +795,8 @@ class ExcelComparator:
             for cell in row:
                 cell.font = Font(bold=(cell.column == 1))
         
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, 3):  # We have 2 columns in this sheet
+        # Auto-size columns
+        for col_idx in range(1, 3):  # 2 columns
             max_length = 0
             col_letter = get_column_letter(col_idx)
             
@@ -857,8 +860,8 @@ class ExcelComparator:
                     cell = ws.cell(ws.max_row, col_idx)
                     cell.border = THIN_BORDER
         
-        # Auto-size columns without merged cell error
-        for col_idx in range(1, 7):  # We have 6 columns in this sheet
+        # Auto-size columns
+        for col_idx in range(1, 7):  # 6 columns
             max_length = 0
             col_letter = get_column_letter(col_idx)
             
