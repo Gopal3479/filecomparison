@@ -13,8 +13,9 @@ HEADER_DIFF_FILL = PatternFill(start_color="FFD700", end_color="FFD700", fill_ty
 CELL_DIFF_FILL = PatternFill(start_color="FF6347", end_color="FF6347", fill_type="solid")    # Tomato
 NUM_DIFF_FILL = PatternFill(start_color="87CEFA", end_color="87CEFA", fill_type="solid")     # Light Sky Blue
 ROW_MATCH_FILL = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")    # Light Green
-ROW_MISSING_FILL = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")  # Light Gray
+ROW_MISSING_FILL = PatternFill(start_color="D3D3D3", end_color="D3极3D3", fill_type="solid")  # Light Gray
 HEADER_FILL = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")       # Light Gray
+TOTAL_FILL = PatternFill(start_color="E6E6FA", end_color="E6E6FA", fill_type="solid")        # Lavender
 
 # Border style
 THIN_BORDER = Border(left=Side(style='thin'), 
@@ -92,7 +93,7 @@ class ExcelComparator:
         ).pack(side="left", padx=5, fill="x", expand=True)
         
         tk.Button(
-            file1_frame, 
+            file1极rame, 
             text="Browse", 
             command=lambda: self.select_file(1), 
             bg="#3498db", 
@@ -143,7 +144,7 @@ class ExcelComparator:
         
         # Sheet 1
         sheet1_frame = tk.Frame(sheet_frame, bg="#f0f2f5")
-        sheet1_frame.pack(fill="x", pady=5)
+        sheet1_frame.pack(fill="x", p极y=5)
         
         tk.Label(
             sheet1_frame, 
@@ -337,6 +338,23 @@ class ExcelComparator:
             font=("Arial", 9), 
             bg="#f0f2f5"
         ).pack(side="left", padx=5)
+        
+        # Total legend
+        total_legend = tk.Frame(legend_inner, bg="#f0f2f5")
+        total_legend.pack(side="left", padx=10)
+        tk.Label(
+            total_legend, 
+            text="    ", 
+            bg="#E6E6FA", 
+            width=3, 
+            height=1
+        ).pack(side="left")
+        tk.Label(
+            total_legend, 
+            text="Total Row", 
+            font=("Arial", 9), 
+            bg="#f0f2f5"
+        ).pack(side="left", padx=5)
     
     def select_file(self, file_num):
         file_path = filedialog.askopenfilename(
@@ -385,12 +403,16 @@ class ExcelComparator:
             # Include string columns and object columns that are likely strings
             if pd.api.types.is_string_dtype(df[col]) or \
                (pd.api.types.is_object_dtype(df[col]) and 
-                all(isinstance(x, str) or pd.isna(x) for x in df[col].head(100)):
+                all((isinstance(x, str) or pd.isna(x)) for x in df[col].head(100))):
                 string_cols.append(col)
         return string_cols
     
+    def get_numeric_columns(self, df):
+        """Get all numeric columns"""
+        return [col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])]
+    
     def create_side_by_side_sheet(self, df1, df2, output_wb):
-        """Create side-by-side comparison sheet with row matching column"""
+        """Create side-by-side comparison sheet with row matching column and totals"""
         # Create sheet
         ws = output_wb.create_sheet("Side by Side Comparison")
         
@@ -401,6 +423,10 @@ class ExcelComparator:
         str_cols1 = self.get_string_columns(df1)
         str_cols2 = self.get_string_columns(df2)
         all_str_cols = list(set(str_cols1) | set(str_cols2))
+        
+        # Get numeric columns
+        num_cols1 = self.get_numeric_columns(df1)
+        num_cols2 = self.get_numeric_columns(df2)
         
         # Create concatenation keys using all string columns
         concat_keys1 = {}
@@ -430,7 +456,7 @@ class ExcelComparator:
         keys1_set = set(concat_keys1.values())
         keys2_set = set(concat_keys2.values())
         
-        # Create match status columns in original dataframes
+        # Create match status column
         df1['Match Status'] = "Not Matched"
         df2['Match Status'] = "Not Matched"
         
@@ -442,12 +468,40 @@ class ExcelComparator:
                 df2.loc[df2.index.isin([idx for idx, k in concat_keys2.items() if k == key]), 'Match Status'] = "Matched"
         
         # Write headers
-        header_row = list(df1.columns) + list(df2.columns)
+        header_row = list(df1.columns) + list(df2.columns) + ["Overall Match"]
         ws.append(header_row)
         
         # Apply header styling
         for cell in ws[1]:
             cell.fill = HEADER_FILL
+            cell.font = Font(bold=True)
+            cell.border = THIN_BORDER
+        
+        # Add totals row at the top (row 1)
+        totals_row = []
+        
+        # File1 totals
+        for col in df1.columns:
+            if col in num_cols1:
+                totals_row.append(df1[col].sum())
+            else:
+                totals_row.append("")
+        
+        # File2 totals
+        for col in df2.columns:
+            if col in num_cols2:
+                totals_row.append(df2[col].sum())
+            else:
+                totals_row.append("")
+        
+        # Overall match for totals
+        totals_row.append("Totals")
+        ws.append(totals_row)
+        
+        # Apply styling to totals row
+        for col_idx in range(1, len(totals_row) + 1):
+            cell = ws.cell(row=2, column=col_idx)
+            cell.fill = TOTAL_FILL
             cell.font = Font(bold=True)
             cell.border = THIN_BORDER
         
@@ -468,52 +522,73 @@ class ExcelComparator:
             else:
                 row_data.extend([""] * len(df2.columns))
             
+            # Add overall match status
+            overall_match = "Not Matched"
+            if i < len(df1) and i < len(df2):
+                file1_match = df1.iloc[i]['Match Status']
+                file2_match = df2.iloc[i]['Match Status']
+                
+                # Check if both rows are matched and numerical values match
+                if file1_match == "Matched" and file2_match == "Matched":
+                    numerical_match = True
+                    for col in common_cols:
+                        if pd.api.types.is_numeric_dtype(df1[col]) and pd.api.types.is_numeric_dtype(df2[col]):
+                            if not self.are_equal(df1.iloc[i][col], df2.iloc[i][col]):
+                                numerical_match = False
+                                break
+                    overall_match = "Matched" if numerical_match else "Matched (Values Differ)"
+            
+            row_data.append(overall_match)
             ws.append(row_data)
             
             # Apply row matching highlighting
             if self.highlight_row_matches.get():
-                file1_match = df1.iloc[i]['Match Status'] if i < len(df1) else None
-                file2_match = df2.iloc[i]['Match Status'] if i < len(df2) else None
+                row_idx = i + 3  # Accounts for header and totals row
                 
                 # Calculate column positions
                 file1_start_col = 1
                 file1_end_col = len(df1.columns)
                 file2_start_col = file1_end_col + 1
                 file2_end_col = file2_start_col + len(df2.columns) - 1
-                match_status_col = file2_end_col + 1
+                overall_match_col = file2_end_col + 1
                 
                 # Apply styling
-                if file1_match == "Matched":
+                if overall_match == "Matched":
                     for col_idx in range(file1_start_col, file1_end_col + 1):
-                        ws.cell(row=i+2, column=col_idx).fill = ROW_MATCH_FILL
+                        ws.cell(row=row_idx, column=col_idx).fill = ROW_MATCH_FILL
+                    for col_idx in range(file2_start_col, file2_end_col + 1):
+                        ws.cell(row=row_idx, column=col_idx).fill = ROW_MATCH_FILL
+                    ws.cell(row=row_idx, column=overall_match_col).fill = ROW_MATCH_FILL
+                elif overall_match == "Matched (Values Differ)":
+                    for col_idx in range(file1_start_col, file1_end_col + 1):
+                        ws.cell(row=row_idx, column=col_idx).fill = ROW_MATCH_FILL
+                    for col_idx in range(file2_start_col, file2_end_col + 1):
+                        ws.cell(row=row_idx, column=col_idx).fill = ROW_MATCH_FILL
+                    ws.cell(row=row_idx, column=overall_match_col).fill = CELL_DIFF_FILL
                 else:
                     for col_idx in range(file1_start_col, file1_end_col + 1):
-                        ws.cell(row=i+2, column=col_idx).fill = ROW_MISSING_FILL
-                
-                if file2_match == "Matched":
+                        ws.cell(row=row_idx, column=col_idx).fill = ROW_MISSING_FILL
                     for col_idx in range(file2_start_col, file2_end_col + 1):
-                        ws.cell(row=i+2, column=col_idx).fill = ROW_MATCH_FILL
-                else:
-                    for col_idx in range(file2_start_col, file2_end_col + 1):
-                        ws.cell(row=i+2, column=col_idx).fill = ROW_MISSING_FILL
+                        ws.cell(row=row_idx, column=col_idx).fill = ROW_MISSING_FILL
             
             # Apply cell difference highlighting
-            if self.highlight_cell_diffs.get():
-                if i < len(df1) and i < len(df2):
-                    for col in common_cols:
-                        val1 = df1.at[i, col]
-                        val2 = df2.at[i, col]
+            if self.highlight_cell_diffs.get() and i < len(df1) and i < len(df2):
+                row_idx = i + 3
+                for col in common_cols:
+                    val1 = df1.iloc[i][col]
+                    val2 = df2.iloc[i][col]
+                    
+                    if not self.are_equal(val1, val2):
+                        col_idx1 = list(df1.columns).index(col) + 1
+                        col_idx2 = list(df2.columns).index(col) + len(df1.columns) + 1
                         
-                        if not self.are_equal(val1, val2):
-                            col_idx1 = list(df1.columns).index(col) + 1
-                            col_idx2 = list(df2.columns).index(col) + len(df1.columns) + 1
-                            
-                            ws.cell(row=i+2, column=col_idx1).fill = CELL_DIFF_FILL
-                            ws.cell(row=i+2, column=col_idx2).fill = CELL_DIFF_FILL
+                        ws.cell(row=row_idx, column=col_idx1).fill = CELL_DIFF_FILL
+                        ws.cell(row=row_idx, column=col_idx2).fill = CELL_DIFF_FILL
             
             # Apply borders
+            row_idx = i + 3
             for col_idx in range(1, len(header_row) + 1):
-                ws.cell(row=i+2, column=col_idx).border = THIN_BORDER
+                ws.cell(row=row_idx, column=col_idx).border = THIN_BORDER
         
         # Auto-size columns
         for col_idx in range(1, len(header_row) + 1):
@@ -534,7 +609,7 @@ class ExcelComparator:
             ws.column_dimensions[col_letter].width = adjusted_width
         
         # Freeze panes
-        ws.freeze_panes = "A2"
+        ws.freeze_panes = "A3"
         
         return len(df1[df1['Match Status'] == "Matched"]), len(df1[df1['Match Status'] == "Not Matched"]), len(df2[df2['Match Status'] == "Not Matched"])
     
@@ -758,4 +833,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = ExcelComparator(root)
     root.mainloop()
-
