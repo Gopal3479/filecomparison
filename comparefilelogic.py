@@ -1,5 +1,5 @@
 def create_side_by_side_sheet(self, df1, df2, output_wb):
-    """Create side-by-side comparison sheet with row matching column"""
+    """Create side-by-side comparison sheet with single Match Status column at end"""
     # Create sheet
     ws = output_wb.create_sheet("Side by Side Comparison")
     
@@ -39,19 +39,17 @@ def create_side_by_side_sheet(self, df1, df2, output_wb):
     keys1_set = set(concat_keys1.values())
     keys2_set = set(concat_keys2.values())
     
-    # Create match status columns in original dataframes
-    df1['Match Status'] = "Not Matched"
-    df2['Match Status'] = "Not Matched"
+    # Create match status for File1
+    file1_match_status = []
+    for idx in df1.index:
+        key = concat_keys1[idx]
+        if key is not None and key in keys2_set:
+            file1_match_status.append("Matched")
+        else:
+            file1_match_status.append("Not Matched")
     
-    # Mark matched rows in both dataframes
-    for key in keys1_set:
-        if key in keys2_set:
-            # Mark all rows with this key in both files as matched
-            df1.loc[df1.index.isin([idx for idx, k in concat_keys1.items() if k == key]), 'Match Status'] = "Matched"
-            df2.loc[df2.index.isin([idx for idx, k in concat_keys2.items() if k == key]), 'Match Status'] = "Matched"
-    
-    # Write headers - File1 columns + separator + File2 columns
-    header_row = list(df1.columns) + ["|"] + list(df2.columns)
+    # Write headers - File1 columns + separator + File2 columns + Match Status
+    header_row = list(df1.columns) + ["|"] + list(df2.columns) + ["Match Status"]
     ws.append(header_row)
     
     # Apply header styling
@@ -61,9 +59,15 @@ def create_side_by_side_sheet(self, df1, df2, output_wb):
         cell.border = THIN_BORDER
     
     # Special styling for separator column
-    ws.cell(row=1, column=len(df1.columns)+1).fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
-    ws.cell(row=1, column=len(df1.columns)+1).font = Font(color="FFFFFF", bold=True)
-    ws.cell(row=1, column=len(df1.columns)+1).alignment = Alignment(horizontal="center")
+    separator_col = len(df1.columns) + 1
+    ws.cell(row=1, column=separator_col).fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+    ws.cell(row=1, column=separator_col).font = Font(color="FFFFFF", bold=True)
+    ws.cell(row=1, column=separator_col).alignment = Alignment(horizontal="center")
+    
+    # Style Match Status header
+    match_status_col = len(header_row)
+    ws.cell(row=1, column=match_status_col).fill = HEADER_FILL
+    ws.cell(row=1, column=match_status_col).font = Font(bold=True)
     
     # Write data row by row
     max_rows = max(len(df1), len(df2))
@@ -85,34 +89,39 @@ def create_side_by_side_sheet(self, df1, df2, output_wb):
         else:
             row_data.extend([""] * len(df2.columns))
         
+        # Add Match Status (only for File1 rows)
+        if i < len(file1_match_status):
+            row_data.append(file1_match_status[i])
+        else:
+            row_data.append("")
+        
         ws.append(row_data)
         
-        # Apply row matching highlighting
-        if self.highlight_row_matches:
-            file1_match = df1.iloc[i]['Match Status'] if i < len(df1) else None
-            file2_match = df2.iloc[i]['Match Status'] if i < len(df2) else None
+        # Apply row highlighting based on File1's match status
+        if self.highlight_row_matches and i < len(file1_match_status):
+            file1_match = file1_match_status[i]
             
-            # Calculate column positions
+            # Calculate column ranges
             file1_start_col = 1
             file1_end_col = len(df1.columns)
-            separator_col = file1_end_col + 1
-            file2_start_col = separator_col + 1
+            file2_start_col = file1_end_col + 2  # +1 for separator, +1 for next column
             file2_end_col = file2_start_col + len(df2.columns) - 1
             
-            # Apply styling
+            # Apply styling to File1 columns
             if file1_match == "Matched":
-                for col_idx in range(file1_start_col, file1_end_col + 1):
-                    ws.cell(row=i+2, column=col_idx).fill = ROW_MATCH_FILL
+                fill = ROW_MATCH_FILL
             else:
-                for col_idx in range(file1_start_col, file1_end_col + 1):
-                    ws.cell(row=i+2, column=col_idx).fill = ROW_MISSING_FILL
+                fill = ROW_MISSING_FILL
+                
+            for col_idx in range(file1_start_col, file1_end_col + 1):
+                ws.cell(row=i+2, column=col_idx).fill = fill
             
-            if file2_match == "Matched":
-                for col_idx in range(file2_start_col, file2_end_col + 1):
-                    ws.cell(row=i+2, column=col_idx).fill = ROW_MATCH_FILL
-            else:
-                for col_idx in range(file2_start_col, file2_end_col + 1):
-                    ws.cell(row=i+2, column=col_idx).fill = ROW_MISSING_FILL
+            # Apply same styling to File2 columns
+            for col_idx in range(file2_start_col, file2_end_col + 1):
+                ws.cell(row=i+2, column=col_idx).fill = fill
+            
+            # Style Match Status column
+            ws.cell(row=i+2, column=match_status_col).fill = fill
         
         # Apply cell difference highlighting
         if self.highlight_cell_diffs:
@@ -123,7 +132,7 @@ def create_side_by_side_sheet(self, df1, df2, output_wb):
                     
                     if not self.are_equal(val1, val2):
                         col_idx1 = list(df1.columns).index(col) + 1
-                        col_idx2 = list(df2.columns).index(col) + len(df1.columns) + 2  # +2 because of separator column
+                        col_idx2 = list(df2.columns).index(col) + len(df1.columns) + 2  # +1 for separator, +1 for next column
                         
                         ws.cell(row=i+2, column=col_idx1).fill = CELL_DIFF_FILL
                         ws.cell(row=i+2, column=col_idx2).fill = CELL_DIFF_FILL
@@ -156,10 +165,12 @@ def create_side_by_side_sheet(self, df1, df2, output_wb):
         ws.column_dimensions[col_letter].width = adjusted_width
     
     # Set a fixed width for the separator column
-    separator_col_letter = get_column_letter(len(df1.columns) + 1)
-    ws.column_dimensions[separator_col_letter].width = 3
+    ws.column_dimensions[get_column_letter(separator_col)].width = 3
     
     # Freeze panes
     ws.freeze_panes = "A2"
     
-    return len(df1[df1['Match Status'] == "Matched"]), len(df1[df1['Match Status'] == "Not Matched"]), len(df2[df2['Match Status'] == "Not Matched"])
+    matched_count = file1_match_status.count("Matched")
+    unmatched_count = file1_match_status.count("Not Matched")
+    
+    return matched_count, unmatched_count, len(df2) - matched_count
