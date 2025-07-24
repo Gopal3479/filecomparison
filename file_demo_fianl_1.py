@@ -10,6 +10,7 @@ CELL_DIFF_FILL = PatternFill(start_color="FF6347", end_color="FF6347", fill_type
 ROW_MATCH_FILL = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")    # Light Green
 ROW_MISSING_FILL = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")  # Light Gray
 HEADER_FILL = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")       # Light Gray
+TOTAL_ROW_FILL = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")    # Light Blue
 
 # Border style
 THIN_BORDER = Border(left=Side(style='thin'), 
@@ -46,19 +47,66 @@ class ExcelComparator:
             return abs(a - b) < 0.01  # Tolerance for floating point differences
         return str(a).strip() == str(b).strip()
     
+    def is_numeric(self, series):
+        """Check if a series is numeric"""
+        return pd.api.types.is_numeric_dtype(series)
+    
     def create_side_by_side_sheet(self, df1, df2, output_wb):
-        """Optimized side-by-side comparison with efficient processing"""
+        """Optimized side-by-side comparison with total row"""
         ws = output_wb.create_sheet("Side by Side Comparison")
         common_cols = list(set(df1.columns) & set(df2.columns))
+        
+        # Identify numeric columns
+        num_cols1 = [col for col in df1.columns if self.is_numeric(df1[col])]
+        num_cols2 = [col for col in df2.columns if self.is_numeric(df2[col])]
+        common_num_cols = list(set(num_cols1) & set(num_cols2))
         
         # Create header row
         header_row = list(df1.columns) + [" | "] + list(df2.columns) + ["Match Status"]
         ws.append(header_row)
         
-        # Apply header formatting in bulk
+        # Create total row
+        total_row = []
+        
+        # File1 totals
+        for col in df1.columns:
+            if col in num_cols1:
+                total_row.append(df1[col].sum())
+            else:
+                total_row.append("")
+        
+        # Separator
+        total_row.append(" | ")
+        
+        # File2 totals
+        for col in df2.columns:
+            if col in num_cols2:
+                total_row.append(df2[col].sum())
+            else:
+                total_row.append("")
+        
+        # Total row match status
+        total_match = True
+        for col in common_num_cols:
+            val1 = df1[col].sum()
+            val2 = df2[col].sum()
+            if not self.are_equal(val1, val2):
+                total_match = False
+                break
+        total_row.append("Matched" if total_match else "Not Matched")
+        ws.append(total_row)
+        
+        # Apply header formatting
         for col_idx in range(1, len(header_row) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.fill = HEADER_FILL
+            cell.font = Font(bold=True)
+            cell.border = THIN_BORDER
+        
+        # Apply total row formatting
+        for col_idx in range(1, len(total_row) + 1):
+            cell = ws.cell(row=2, column=col_idx)
+            cell.fill = TOTAL_ROW_FILL
             cell.font = Font(bold=True)
             cell.border = THIN_BORDER
         
@@ -76,7 +124,7 @@ class ExcelComparator:
             row_match = True
             diffs_in_row = []
             
-            # Compare common columns for existing rows
+            # Only compare if both rows exist
             if i < min(len(df1), len(df2)):
                 for col in common_cols:
                     val1 = df1.at[i, col]
@@ -94,7 +142,7 @@ class ExcelComparator:
             match_status.append("Matched" if row_match else "Not Matched")
             diff_positions.append(diffs_in_row)
         
-        # Write data and apply formatting in bulk
+        # Write data rows
         for i in range(max(len(df1), len(df2))):
             row_data = []
             
@@ -120,11 +168,11 @@ class ExcelComparator:
             
             # Apply border to all cells
             for col_idx in range(1, len(header_row) + 1):
-                ws.cell(row=i+2, column=col_idx).border = THIN_BORDER
+                ws.cell(row=i+3, column=col_idx).border = THIN_BORDER
         
-        # Apply highlighting in optimized loops
+        # Apply highlighting
         for i in range(len(match_status)):
-            row_idx = i + 2
+            row_idx = i + 3  # Start after header and total row
             
             # Highlight separator column
             ws.cell(row=row_idx, column=separator_col).fill = PatternFill(
@@ -153,18 +201,29 @@ class ExcelComparator:
                 ws.cell(row=row_idx, column=col_idx1).fill = CELL_DIFF_FILL
                 ws.cell(row=row_idx, column=col_idx2).fill = CELL_DIFF_FILL
         
+        # Highlight total row differences
+        if not total_match:
+            for col in common_num_cols:
+                col_idx1 = df1.columns.get_loc(col) + 1
+                col_idx2 = df2.columns.get_loc(col) + file2_start_col
+                ws.cell(row=2, column=col_idx1).fill = CELL_DIFF_FILL
+                ws.cell(row=2, column=col_idx2).fill = CELL_DIFF_FILL
+        
         # Optimized column width calculation
         for col_idx in range(1, len(header_row) + 1):
             max_length = 0
             col_letter = get_column_letter(col_idx)
             
-            # Check header first
-            header_length = len(str(header_row[col_idx-1]))
-            max_length = max(max_length, header_length)
+            # Check header
+            max_length = max(max_length, len(str(header_row[col_idx-1])))
+            
+            # Check total row
+            if col_idx <= len(total_row):
+                max_length = max(max_length, len(str(total_row[col_idx-1])))
             
             # Check sample of data rows
             sample_rows = min(100, len(df1) + len(df2))
-            for row_idx in range(2, min(2 + sample_rows, ws.max_row)):
+            for row_idx in range(3, min(3 + sample_rows, ws.max_row)):
                 cell_value = ws.cell(row=row_idx, column=col_idx).value
                 if cell_value is not None:
                     max_length = max(max_length, len(str(cell_value)))
@@ -176,29 +235,9 @@ class ExcelComparator:
     
     def compare(self, output_file=None):
         try:
-            # Read data with optimized parameters
-            df1 = pd.read_excel(
-                self.file1_path, 
-                sheet_name=self.sheet1_name,
-                engine='openpyxl',
-                dtype=str,
-                na_filter=False
-            )
-            df2 = pd.read_excel(
-                self.file2_path, 
-                sheet_name=self.sheet2_name,
-                engine='openpyxl',
-                dtype=str,
-                na_filter=False
-            )
-            
-            # Convert numeric columns to float
-            for df in [df1, df2]:
-                for col in df.columns:
-                    try:
-                        df[col] = pd.to_numeric(df[col], errors='ignore')
-                    except:
-                        pass
+            # Read data
+            df1 = pd.read_excel(self.file1_path, sheet_name=self.sheet1_name)
+            df2 = pd.read_excel(self.file2_path, sheet_name=self.sheet2_name)
             
             # Create comparison workbook
             output_wb = Workbook()
